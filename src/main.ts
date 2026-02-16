@@ -1,32 +1,19 @@
-import { runBuilder } from "./roles/builder";
-import { runHarvester } from "./roles/harvester";
-import { runUpgrader } from "./roles/upgrader";
-import { runRooms } from "./roomManager";
-import { runSpawns } from "./spawnManager";
-import { runTowers } from "./towerManager";
+import { runColonyManager } from "./managers/colonyManager";
+import { runConstructionManager } from "./managers/constructionManager";
+import { runDefenseManager } from "./managers/defenseManager";
+import { runSpawnManager } from "./managers/spawnManager";
+import { runRole } from "./roles";
 import { cleanupMemory } from "./utils";
-
-function runCreep(creep: Creep): void {
-  if (creep.memory.role === "harvester") {
-    runHarvester(creep);
-    return;
-  }
-  if (creep.memory.role === "upgrader") {
-    runUpgrader(creep);
-    return;
-  }
-  if (creep.memory.role === "builder") {
-    runBuilder(creep);
-  }
-}
 
 export const loop = (): void => {
   cleanupMemory();
-  runRooms();
-  runSpawns();
-  runTowers();
 
-  for (const name in Game.creeps) {
-    runCreep(Game.creeps[name]);
+  runColonyManager();
+  runSpawnManager();
+  runConstructionManager();
+  runDefenseManager();
+
+  for (const creep of Object.values(Game.creeps)) {
+    runRole(creep);
   }
 };

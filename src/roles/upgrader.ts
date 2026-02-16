@@ -1,38 +1,13 @@
+import { upgradeController } from "../tasks/work";
+import { updateWorkingState, acquireEnergy } from "./common";
+
 export function runUpgrader(creep: Creep): void {
-  const controller = creep.room.controller;
-  if (!controller) return;
+  updateWorkingState(creep);
 
-  if (creep.memory.working && creep.store[RESOURCE_ENERGY] === 0) {
-    creep.memory.working = false;
-  }
-  if (!creep.memory.working && creep.store.getFreeCapacity() === 0) {
-    creep.memory.working = true;
-  }
-
-  if (creep.memory.working) {
-    if (creep.upgradeController(controller) === ERR_NOT_IN_RANGE) {
-      creep.moveTo(controller, { visualizePathStyle: { stroke: "#66bb6a" } });
-    }
+  if (!creep.memory.working) {
+    acquireEnergy(creep);
     return;
   }
 
-  const container = creep.pos.findClosestByPath(FIND_STRUCTURES, {
-    filter: (structure: Structure) =>
-      (structure.structureType === STRUCTURE_CONTAINER ||
-        structure.structureType === STRUCTURE_STORAGE) &&
-      (structure as StructureContainer | StructureStorage).store.getUsedCapacity(RESOURCE_ENERGY) > 0
-  }) as StructureContainer | StructureStorage | null;
-
-  if (container) {
-    if (creep.withdraw(container, RESOURCE_ENERGY) === ERR_NOT_IN_RANGE) {
-      creep.moveTo(container, { visualizePathStyle: { stroke: "#ffa726" } });
-    }
-    return;
-  }
-
-  const source = creep.pos.findClosestByPath(FIND_SOURCES_ACTIVE);
-  if (!source) return;
-  if (creep.harvest(source) === ERR_NOT_IN_RANGE) {
-    creep.moveTo(source, { visualizePathStyle: { stroke: "#ffa726" } });
-  }
+  upgradeController(creep);
 }

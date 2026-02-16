@@ -1,18 +1,29 @@
-export function countRole(role: CreepMemory["role"]): number {
-  return _.filter(Game.creeps, (creep) => creep.memory.role === role).length;
+import type { RoleName } from "./config/roles";
+
+const PART_COST: Record<BodyPartConstant, number> = {
+  move: 50,
+  work: 100,
+  carry: 50,
+  attack: 80,
+  ranged_attack: 150,
+  tough: 10,
+  heal: 250,
+  claim: 600
+};
+
+export function bodyCost(body: BodyPartConstant[]): number {
+  return body.reduce((sum, part) => sum + PART_COST[part], 0);
 }
 
-export function nearestEnergyTarget(creep: Creep): StructureSpawn | StructureExtension | StructureTower | null {
-  const target = creep.pos.findClosestByPath(FIND_STRUCTURES, {
-    filter: (structure: Structure) =>
-      (structure.structureType === STRUCTURE_SPAWN ||
-        structure.structureType === STRUCTURE_EXTENSION ||
-        structure.structureType === STRUCTURE_TOWER) &&
-      (structure as StructureSpawn | StructureExtension | StructureTower).store.getFreeCapacity(RESOURCE_ENERGY) > 0
-  });
+export function countRoleInRoom(roomName: string, role: RoleName): number {
+  let count = 0;
+  for (const creep of Object.values(Game.creeps)) {
+    if (creep.memory.homeRoom === roomName && creep.memory.role === role) {
+      count += 1;
+    }
+  }
 
-  if (!target) return null;
-  return target as StructureSpawn | StructureExtension | StructureTower;
+  return count;
 }
 
 export function cleanupMemory(): void {

@@ -1,7 +1,7 @@
-import { buildNearestSite, upgradeController } from "../tasks/work";
+import { repairInfrastructure, upgradeController } from "../tasks/work";
 import { updateWorkingState, acquireEnergy } from "./common";
 
-export function runBuilder(creep: Creep): void {
+export function runRepairer(creep: Creep): void {
   updateWorkingState(creep);
 
   if (!creep.memory.working) {
@@ -9,6 +9,6 @@ export function runBuilder(creep: Creep): void {
     return;
   }
 
-  if (buildNearestSite(creep)) return;
+  if (repairInfrastructure(creep)) return;
   upgradeController(creep);
 }
