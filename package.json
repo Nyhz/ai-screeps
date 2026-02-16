@@ -1,0 +1,24 @@
+{
+  "name": "screeps-ts-colony",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript Screeps colony starter with typed automation and upload script.",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --format=cjs --target=es2018 --outfile=dist/main.js --sourcemap",
+    "watch": "esbuild src/main.ts --bundle --platform=node --format=cjs --target=es2018 --outfile=dist/main.js --sourcemap --watch",
+    "push": "npm run build && node scripts/upload.js",
+    "push:sim": "npm run build && node scripts/upload.js --sim",
+    "push:ptr": "npm run build && node scripts/upload.js --ptr"
+  },
+  "devDependencies": {
+    "@types/lodash": "^4.17.16",
+    "@types/node": "^22.13.5",
+    "@types/screeps": "^3.3.8",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "screeps-api": "^1.16.0"
+  }
+}
