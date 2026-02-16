@@ -1,16 +1,64 @@
 import { moveToTarget } from "./movement";
 
-function assignSource(creep: Creep): Source | null {
-  if (creep.memory.sourceId) {
-    const source = Game.getObjectById(creep.memory.sourceId as Id<Source>);
-    if (source) return source;
+function isSourceWorker(creep: Creep): boolean {
+  return creep.memory.role === "harvester" || creep.memory.role === "miner";
+}
+
+function sourceLoad(roomName: string, sourceId: Id<Source>, excludeCreepName: string): number {
+  let load = 0;
+
+  for (const other of Object.values(Game.creeps)) {
+    if (other.name === excludeCreepName) continue;
+    if (other.memory.homeRoom !== roomName) continue;
+    if (!isSourceWorker(other)) continue;
+    if (other.memory.sourceId === sourceId) {
+      load += 1;
+    }
   }
 
-  const sources = creep.room.find(FIND_SOURCES);
+  return load;
+}
+
+function assignSource(creep: Creep): Source | null {
+  const sources = creep.room.find(FIND_SOURCES_ACTIVE);
   if (sources.length === 0) return null;
-  const source = sources[Game.time % sources.length];
-  creep.memory.sourceId = source.id;
-  return source;
+
+  if (!isSourceWorker(creep)) {
+    if (creep.memory.sourceId) {
+      const existing = Game.getObjectById(creep.memory.sourceId as Id<Source>);
+      if (existing) return existing;
+    }
+
+    const nearest = creep.pos.findClosestByPath(sources) ?? sources[0];
+    creep.memory.sourceId = nearest.id;
+    return nearest;
+  }
+
+  const existing =
+    creep.memory.sourceId !== undefined ? Game.getObjectById(creep.memory.sourceId as Id<Source>) : null;
+  const shouldRebalance = Game.time % 25 === 0;
+  if (existing && !shouldRebalance) {
+    return existing;
+  }
+
+  let best: Source | null = null;
+  let bestLoad = Number.MAX_SAFE_INTEGER;
+  let bestRange = Number.MAX_SAFE_INTEGER;
+
+  for (const source of sources) {
+    const load = sourceLoad(creep.memory.homeRoom, source.id, creep.name);
+    const range = creep.pos.getRangeTo(source);
+
+    if (load < bestLoad || (load === bestLoad && range < bestRange)) {
+      best = source;
+      bestLoad = load;
+      bestRange = range;
+    }
+  }
+
+  const selected = best ?? sources[0];
+  creep.memory.sourceId = selected.id;
+  return selected;
 }
 
 export function harvestEnergy(creep: Creep): boolean {

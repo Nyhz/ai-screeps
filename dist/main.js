@@ -526,16 +526,54 @@ function fortifyDefenses(creep, minWallHits) {
 }
 
 // src/tasks/energy.ts
-function assignSource(creep) {
-  if (creep.memory.sourceId) {
-    const source2 = Game.getObjectById(creep.memory.sourceId);
-    if (source2) return source2;
+function isSourceWorker(creep) {
+  return creep.memory.role === "harvester" || creep.memory.role === "miner";
+}
+function sourceLoad(roomName, sourceId, excludeCreepName) {
+  let load = 0;
+  for (const other of Object.values(Game.creeps)) {
+    if (other.name === excludeCreepName) continue;
+    if (other.memory.homeRoom !== roomName) continue;
+    if (!isSourceWorker(other)) continue;
+    if (other.memory.sourceId === sourceId) {
+      load += 1;
+    }
   }
-  const sources = creep.room.find(FIND_SOURCES);
+  return load;
+}
+function assignSource(creep) {
+  var _a;
+  const sources = creep.room.find(FIND_SOURCES_ACTIVE);
   if (sources.length === 0) return null;
-  const source = sources[Game.time % sources.length];
-  creep.memory.sourceId = source.id;
-  return source;
+  if (!isSourceWorker(creep)) {
+    if (creep.memory.sourceId) {
+      const existing2 = Game.getObjectById(creep.memory.sourceId);
+      if (existing2) return existing2;
+    }
+    const nearest = (_a = creep.pos.findClosestByPath(sources)) != null ? _a : sources[0];
+    creep.memory.sourceId = nearest.id;
+    return nearest;
+  }
+  const existing = creep.memory.sourceId !== void 0 ? Game.getObjectById(creep.memory.sourceId) : null;
+  const shouldRebalance = Game.time % 25 === 0;
+  if (existing && !shouldRebalance) {
+    return existing;
+  }
+  let best = null;
+  let bestLoad = Number.MAX_SAFE_INTEGER;
+  let bestRange = Number.MAX_SAFE_INTEGER;
+  for (const source of sources) {
+    const load = sourceLoad(creep.memory.homeRoom, source.id, creep.name);
+    const range = creep.pos.getRangeTo(source);
+    if (load < bestLoad || load === bestLoad && range < bestRange) {
+      best = source;
+      bestLoad = load;
+      bestRange = range;
+    }
+  }
+  const selected = best != null ? best : sources[0];
+  creep.memory.sourceId = selected.id;
+  return selected;
 }
 function harvestEnergy(creep) {
   const source = assignSource(creep);
