@@ -1,4 +1,4 @@
-import { moveToRoomCenter } from "../tasks/movement";
+import { moveToRoomCenter, moveToTarget } from "../tasks/movement";
 import { fillPriorityEnergyTargets } from "../tasks/energy";
 import { buildNearestSite, upgradeController } from "../tasks/work";
 import { acquireEnergy, updateWorkingState } from "./common";
@@ -12,7 +12,7 @@ function buildSpawnFirst(creep: Creep): boolean {
 
   const result = creep.build(spawnSite);
   if (result === ERR_NOT_IN_RANGE) {
-    creep.moveTo(spawnSite, { reusePath: 10, visualizePathStyle: { stroke: "#e76f51" } });
+    moveToTarget(creep, spawnSite);
     return true;
   }
 

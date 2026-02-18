@@ -1,4 +1,5 @@
 import { harvestMineral, roomMineral, roomMineralContainer, transferCarriedMinerals } from "../tasks/minerals";
+import { moveToTarget } from "../tasks/movement";
 
 export function runMineralMiner(creep: Creep): void {
   const mineral = roomMineral(creep.room);
@@ -6,7 +7,7 @@ export function runMineralMiner(creep: Creep): void {
 
   const container = roomMineralContainer(creep.room);
   if (container && creep.pos.getRangeTo(container) > 0) {
-    creep.moveTo(container, { reusePath: 20, visualizePathStyle: { stroke: "#c77dff" } });
+    moveToTarget(creep, container, 0);
     return;
   }
 
@@ -19,7 +20,7 @@ export function runMineralMiner(creep: Creep): void {
 
       const result = creep.transfer(container, resource);
       if (result === ERR_NOT_IN_RANGE) {
-        creep.moveTo(container, { reusePath: 10, visualizePathStyle: { stroke: "#c77dff" } });
+        moveToTarget(creep, container);
       }
       return;
     }

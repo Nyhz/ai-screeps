@@ -1,5 +1,6 @@
 import { COLONY_SETTINGS } from "../config/settings";
 import { getRoomAnchor } from "../colony/layoutPlanner";
+import { getOwnedRooms } from "../runtime/tickCache";
 
 function myLinks(room: Room): StructureLink[] {
   return room.find(FIND_MY_STRUCTURES, {
@@ -13,9 +14,10 @@ function controllerLinks(room: Room, links: StructureLink[]): StructureLink[] {
   return links.filter((link) => link.pos.getRangeTo(controller) <= 2);
 }
 
-function sourceLinks(room: Room, links: StructureLink[]): StructureLink[] {
+function sourceLinks(room: Room, links: StructureLink[], controller: StructureLink[]): StructureLink[] {
   const sources = room.find(FIND_SOURCES);
-  return links.filter((link) => sources.some((source) => link.pos.getRangeTo(source) <= 2));
+  const controllerIds = new Set(controller.map((link) => link.id));
+  return links.filter((link) => !controllerIds.has(link.id) && sources.some((source) => link.pos.getRangeTo(source) <= 2));
 }
 
 function coreLinks(room: Room, links: StructureLink[], controller: StructureLink[], source: StructureLink[]): StructureLink[] {
@@ -33,9 +35,10 @@ function canSend(link: StructureLink): boolean {
   return link.store.getUsedCapacity(RESOURCE_ENERGY) >= COLONY_SETTINGS.links.senderMinEnergy;
 }
 
-function pickReceiver(receivers: StructureLink[]): StructureLink | null {
+function pickReceiver(receivers: StructureLink[], senderId?: Id<StructureLink>): StructureLink | null {
   const viable = receivers.filter(
-    (link) => link.store.getFreeCapacity(RESOURCE_ENERGY) >= COLONY_SETTINGS.links.receiverMinFreeCapacity
+    (link) =>
+      link.id !== senderId && link.store.getFreeCapacity(RESOURCE_ENERGY) >= COLONY_SETTINGS.links.receiverMinFreeCapacity
   );
   if (viable.length === 0) return null;
   viable.sort(
@@ -52,7 +55,7 @@ function runRoomLinks(room: Room): void {
   if (links.length < 2) return;
 
   const controller = controllerLinks(room, links);
-  const source = sourceLinks(room, links);
+  const source = sourceLinks(room, links, controller);
   const core = coreLinks(room, links, controller, source);
 
   const controllerNeedsEnergy = controller.filter(
@@ -62,7 +65,7 @@ function runRoomLinks(room: Room): void {
   for (const sender of source) {
     if (!canSend(sender)) continue;
 
-    const preferred = pickReceiver(controllerNeedsEnergy) ?? pickReceiver(core);
+    const preferred = pickReceiver(controllerNeedsEnergy, sender.id) ?? pickReceiver(core, sender.id);
     if (!preferred) continue;
 
     sender.transferEnergy(preferred);
@@ -71,7 +74,7 @@ function runRoomLinks(room: Room): void {
   for (const sender of core) {
     if (!canSend(sender)) continue;
 
-    const receiver = pickReceiver(controllerNeedsEnergy);
+    const receiver = pickReceiver(controllerNeedsEnergy, sender.id);
     if (!receiver) continue;
 
     sender.transferEnergy(receiver);
@@ -80,8 +83,7 @@ function runRoomLinks(room: Room): void {
 
 export function runLinkManager(): void {
   if (!COLONY_SETTINGS.links.enabled) return;
-  for (const room of Object.values(Game.rooms)) {
-    if (!room.controller?.my) continue;
+  for (const room of getOwnedRooms()) {
     runRoomLinks(room);
   }
 }

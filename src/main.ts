@@ -6,6 +6,7 @@ import { runSpawnManager } from "./managers/spawnManager";
 import { runTelemetryManager } from "./managers/telemetryManager";
 import { runThreatManager } from "./managers/threatManager";
 import { runRole } from "./roles";
+import { getAllCreeps } from "./runtime/tickCache";
 import { cleanupMemory } from "./utils";
 
 export const loop = (): void => {
@@ -19,7 +20,7 @@ export const loop = (): void => {
   runDefenseManager();
   runTelemetryManager();
 
-  for (const creep of Object.values(Game.creeps)) {
+  for (const creep of getAllCreeps()) {
     runRole(creep);
   }
 };

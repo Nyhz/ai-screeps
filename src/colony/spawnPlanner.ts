@@ -4,6 +4,7 @@ import {
   getBootstrapTargetRooms,
   getPendingManualClaimTargets,
   isUpgradingPaused,
+  isRemoteRoomAllowed,
   resolveRoomSettings
 } from "../config/settings";
 import { ROLE_ORDER, type RoleName } from "../config/roles";
@@ -40,8 +41,23 @@ function shouldRunMineralPipeline(snapshot: RoomSnapshot): boolean {
 }
 
 function shouldSpawnClaimer(snapshot: RoomSnapshot): boolean {
-  if (COLONY_SETTINGS.expansion.autoClaimNeighbors) return true;
-  return getPendingManualClaimTargets(snapshot.roomName).length > 0;
+  if (!COLONY_SETTINGS.expansion.autoClaimNeighbors) {
+    return getPendingManualClaimTargets(snapshot.roomName).length > 0;
+  }
+
+  const exits = Game.map.describeExits(snapshot.roomName);
+  if (!exits) return false;
+
+  const neighbors = [...new Set(Object.values(exits))];
+  for (const neighbor of neighbors) {
+    if (!isRemoteRoomAllowed(snapshot.roomName, neighbor)) continue;
+
+    const room = Game.rooms[neighbor];
+    if (!room?.controller) return true;
+    if (!room.controller.owner && !room.controller.reservation) return true;
+  }
+
+  return false;
 }
 
 export function deriveDesiredRoles(

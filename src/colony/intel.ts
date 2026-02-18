@@ -1,4 +1,5 @@
 import { ROLE_ORDER, type RoleName } from "../config/roles";
+import { getCreepsByHomeRoom } from "../runtime/tickCache";
 import type { RoomSnapshot } from "./types";
 
 function emptyRoleCounts(): Record<RoleName, number> {
@@ -11,8 +12,7 @@ function emptyRoleCounts(): Record<RoleName, number> {
 
 export function collectRoomSnapshot(room: Room): RoomSnapshot {
   const creepsByRole = emptyRoleCounts();
-  for (const creep of Object.values(Game.creeps)) {
-    if (creep.memory.homeRoom !== room.name) continue;
+  for (const creep of getCreepsByHomeRoom(room.name)) {
     creepsByRole[creep.memory.role] += 1;
   }
 

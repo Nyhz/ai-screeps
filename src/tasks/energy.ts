@@ -1,4 +1,5 @@
 import { COLONY_SETTINGS } from "../config/settings";
+import { getCreepsByHomeRoom } from "../runtime/tickCache";
 import { moveToTarget } from "./movement";
 
 function isSourceWorker(creep: Creep): boolean {
@@ -8,9 +9,8 @@ function isSourceWorker(creep: Creep): boolean {
 function sourceLoad(roomName: string, sourceId: Id<Source>, excludeCreepName: string): number {
   let load = 0;
 
-  for (const other of Object.values(Game.creeps)) {
+  for (const other of getCreepsByHomeRoom(roomName)) {
     if (other.name === excludeCreepName) continue;
-    if (other.memory.homeRoom !== roomName) continue;
     if (!isSourceWorker(other)) continue;
     if (other.memory.sourceId === sourceId) {
       load += 1;

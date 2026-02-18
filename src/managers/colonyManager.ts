@@ -3,11 +3,11 @@ import { deriveDesiredRoles } from "../colony/spawnPlanner";
 import { deriveStageAndCapabilities } from "../colony/stageManager";
 import { deriveTargetRooms } from "../colony/strategyManager";
 import { syncExpansionStateForHome } from "../config/settings";
+import { getOwnedRooms } from "../runtime/tickCache";
 import type { ColonyStrategy } from "../colony/types";
 
 export function runColonyManager(): void {
-  for (const room of Object.values(Game.rooms)) {
-    if (!room.controller?.my) continue;
+  for (const room of getOwnedRooms()) {
     syncExpansionStateForHome(room.name);
 
     const snapshot = collectRoomSnapshot(room);

@@ -1,8 +1,43 @@
 import { ROLE_BODIES } from "../config/bodyPlans";
 import { COLONY_SETTINGS } from "../config/settings";
 import { ROLE_ORDER, type RoleName } from "../config/roles";
-import { getEmergencySoldierCount } from "./threatManager";
+import { getAllCreeps, getCreepsByHomeRoom, getOwnedRooms } from "../runtime/tickCache";
 import { bodyCost } from "../utils";
+import { getEmergencySoldierCount } from "./threatManager";
+
+type RoleCounts = Record<RoleName, number>;
+
+function emptyRoleCounts(): RoleCounts {
+  const counts = {} as RoleCounts;
+  for (const role of ROLE_ORDER) {
+    counts[role] = 0;
+  }
+  return counts;
+}
+
+function countRoles(creeps: Creep[]): RoleCounts {
+  const counts = emptyRoleCounts();
+  for (const creep of creeps) {
+    counts[creep.memory.role] += 1;
+  }
+  return counts;
+}
+
+function effectiveRoleCount(
+  role: RoleName,
+  current: RoleCounts,
+  planned: Partial<Record<RoleName, number>>
+): number {
+  return current[role] + (planned[role] ?? 0);
+}
+
+function totalEffectiveCount(current: RoleCounts, planned: Partial<Record<RoleName, number>>): number {
+  let total = 0;
+  for (const role of ROLE_ORDER) {
+    total += effectiveRoleCount(role, current, planned);
+  }
+  return total;
+}
 
 function buildBody(role: RoleName, energyBudget: number): BodyPartConstant[] | null {
   const blueprint = ROLE_BODIES[role];
@@ -11,32 +46,37 @@ function buildBody(role: RoleName, energyBudget: number): BodyPartConstant[] | n
 
   const body: BodyPartConstant[] = [...blueprint.min];
   const segmentCost = bodyCost(blueprint.segment);
-
+  let currentCost = minCost;
   let segments = 1;
+
   while (
     segments < blueprint.maxSegments &&
     body.length + blueprint.segment.length <= 50 &&
-    bodyCost(body) + segmentCost <= energyBudget
+    currentCost + segmentCost <= energyBudget
   ) {
     body.push(...blueprint.segment);
+    currentCost += segmentCost;
     segments += 1;
   }
 
   return body;
 }
 
-function nextRoleToSpawn(spawn: StructureSpawn): RoleName | null {
+function nextRoleToSpawn(
+  spawn: StructureSpawn,
+  currentRoleCounts: RoleCounts,
+  plannedRoleCounts: Partial<Record<RoleName, number>>
+): RoleName | null {
   const strategy = Memory.strategy?.[spawn.room.name];
   if (!strategy) return null;
 
-  const current = Object.values(Game.creeps).filter((creep) => creep.memory.homeRoom === spawn.room.name);
-  if (current.length === 0) {
+  if (totalEffectiveCount(currentRoleCounts, plannedRoleCounts) === 0) {
     return "harvester";
   }
 
   const emergencySoldiers = getEmergencySoldierCount(spawn.room.name);
   if (emergencySoldiers > 0) {
-    const soldierCount = current.filter((creep) => creep.memory.role === "soldier").length;
+    const soldierCount = effectiveRoleCount("soldier", currentRoleCounts, plannedRoleCounts);
     if (soldierCount < emergencySoldiers) {
       return "soldier";
     }
@@ -46,7 +86,7 @@ function nextRoleToSpawn(spawn: StructureSpawn): RoleName | null {
     const desired = strategy.desiredRoles[role] ?? 0;
     if (desired <= 0) continue;
 
-    const currentCount = current.filter((creep) => creep.memory.role === role).length;
+    const currentCount = effectiveRoleCount(role, currentRoleCounts, plannedRoleCounts);
     if (currentCount < desired) {
       return role;
     }
@@ -55,18 +95,20 @@ function nextRoleToSpawn(spawn: StructureSpawn): RoleName | null {
   return null;
 }
 
-function shouldBypassEnergyGate(spawn: StructureSpawn, role: RoleName): boolean {
-  const current = Object.values(Game.creeps).filter((creep) => creep.memory.homeRoom === spawn.room.name);
-  if (current.length === 0) return true;
+function shouldBypassEnergyGate(
+  spawn: StructureSpawn,
+  role: RoleName,
+  currentRoleCounts: RoleCounts,
+  plannedRoleCounts: Partial<Record<RoleName, number>>
+): boolean {
+  if (totalEffectiveCount(currentRoleCounts, plannedRoleCounts) === 0) return true;
 
   if (role === "harvester") {
-    const harvesters = current.filter((creep) => creep.memory.role === "harvester").length;
-    if (harvesters === 0) return true;
+    if (effectiveRoleCount("harvester", currentRoleCounts, plannedRoleCounts) === 0) return true;
   }
 
   if (role === "hauler") {
-    const haulers = current.filter((creep) => creep.memory.role === "hauler").length;
-    if (haulers === 0) return true;
+    if (effectiveRoleCount("hauler", currentRoleCounts, plannedRoleCounts) === 0) return true;
   }
 
   if (role === "soldier" && getEmergencySoldierCount(spawn.room.name) > 0) {
@@ -82,16 +124,21 @@ function minimumEnergyForRole(spawn: StructureSpawn, role: RoleName): number {
   return Math.min(spawn.room.energyCapacityAvailable, 400);
 }
 
-function pickBootstrapTargetRoom(homeRoom: string, targets: string[]): string | undefined {
+function pickBootstrapTargetRoom(
+  targets: string[],
+  roomCreeps: Creep[],
+  plannedByTarget: Record<string, number>
+): string | undefined {
   if (targets.length === 0) return undefined;
 
   let bestTarget: string | undefined;
   let bestCount = Number.MAX_SAFE_INTEGER;
 
   for (const target of targets) {
-    const count = Object.values(Game.creeps).filter(
-      (creep) => creep.memory.homeRoom === homeRoom && creep.memory.role === "bootstrapper" && creep.memory.targetRoom === target
+    const currentCount = roomCreeps.filter(
+      (creep) => creep.memory.role === "bootstrapper" && creep.memory.targetRoom === target
     ).length;
+    const count = currentCount + (plannedByTarget[target] ?? 0);
 
     if (count < bestCount) {
       bestCount = count;
@@ -108,16 +155,26 @@ function reinforcementNeedForRoom(roomName: string): number {
   return getEmergencySoldierCount(roomName);
 }
 
-function currentDefendersAssigned(roomName: string): number {
-  return Object.values(Game.creeps).filter((creep) => {
+function currentDefendersAssigned(
+  roomName: string,
+  allCreeps: Creep[],
+  plannedByTargetRoom: Record<string, number>
+): number {
+  const assigned = allCreeps.filter((creep) => {
     if (creep.memory.role !== "soldier") return false;
     if (creep.memory.homeRoom === roomName) return true;
     return creep.memory.targetRoom === roomName;
   }).length;
+
+  return assigned + (plannedByTargetRoom[roomName] ?? 0);
 }
 
-function pickReinforcementTarget(homeRoom: string): string | undefined {
-  const candidateRooms = Object.values(Game.rooms).filter((room) => room.controller?.my && room.name !== homeRoom);
+function pickReinforcementTarget(
+  homeRoom: string,
+  allCreeps: Creep[],
+  plannedByTargetRoom: Record<string, number>
+): string | undefined {
+  const candidateRooms = getOwnedRooms().filter((room) => room.name !== homeRoom);
   let bestTarget: string | undefined;
   let bestScore = Number.NEGATIVE_INFINITY;
 
@@ -125,7 +182,7 @@ function pickReinforcementTarget(homeRoom: string): string | undefined {
     const need = reinforcementNeedForRoom(room.name);
     if (need <= 0) continue;
 
-    const assigned = currentDefendersAssigned(room.name);
+    const assigned = currentDefendersAssigned(room.name, allCreeps, plannedByTargetRoom);
     const deficit = need - assigned;
     if (deficit <= 0) continue;
 
@@ -147,13 +204,12 @@ function sourceIdsInHomeRoom(homeRoom: string): Id<Source>[] {
 }
 
 function assignedSourceWorkerCount(
-  homeRoom: string,
+  roomCreeps: Creep[],
   role: "miner" | "hauler",
   sourceId: Id<Source>,
   onlyLocked: boolean
 ): number {
-  return Object.values(Game.creeps).filter((creep) => {
-    if (creep.memory.homeRoom !== homeRoom) return false;
+  return roomCreeps.filter((creep) => {
     if (creep.memory.role !== role) return false;
     if (creep.memory.sourceId !== sourceId) return false;
     if (onlyLocked && !creep.memory.lockSource) return false;
@@ -165,7 +221,8 @@ function pickDedicatedSource(
   homeRoom: string,
   role: "miner" | "hauler",
   desiredPerSource: number,
-  onlyLocked: boolean
+  onlyLocked: boolean,
+  roomCreeps: Creep[]
 ): Id<Source> | undefined {
   const sourceIds = sourceIdsInHomeRoom(homeRoom);
   if (sourceIds.length === 0 || desiredPerSource <= 0) return undefined;
@@ -173,7 +230,7 @@ function pickDedicatedSource(
   let bestSourceId: Id<Source> | undefined;
   let bestCount = Number.MAX_SAFE_INTEGER;
   for (const sourceId of sourceIds) {
-    const count = assignedSourceWorkerCount(homeRoom, role, sourceId, onlyLocked);
+    const count = assignedSourceWorkerCount(roomCreeps, role, sourceId, onlyLocked);
     if (count < bestCount) {
       bestCount = count;
       bestSourceId = sourceId;
@@ -184,23 +241,61 @@ function pickDedicatedSource(
   return bestSourceId;
 }
 
+function uniqueSpawnName(spawn: StructureSpawn, role: RoleName): string {
+  const base = `${role}-${spawn.name}-${Game.time}`;
+  if (!Game.creeps[base]) return base;
+
+  for (let attempt = 1; attempt <= 20; attempt += 1) {
+    const candidate = `${base}-${attempt}`;
+    if (!Game.creeps[candidate]) return candidate;
+  }
+
+  return `${base}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
 export function runSpawnManager(): void {
   const spawns = Object.values(Game.spawns);
+  const allCreeps = getAllCreeps();
+  const roomRoleCounts: Record<string, RoleCounts> = {};
+  const plannedRoleCountsByRoom: Record<string, Partial<Record<RoleName, number>>> = {};
+  const plannedBootstrappersByRoomTarget: Record<string, Record<string, number>> = {};
+  const plannedDefendersByTargetRoom: Record<string, number> = {};
+
   for (const spawn of spawns) {
     if (spawn.spawning) continue;
-
-    const role = nextRoleToSpawn(spawn);
-    if (!role) continue;
     const strategy = Memory.strategy?.[spawn.room.name];
     if (!strategy) continue;
 
+    const roomName = spawn.room.name;
+    if (!roomRoleCounts[roomName]) {
+      roomRoleCounts[roomName] = countRoles(getCreepsByHomeRoom(roomName));
+    }
+    if (!plannedRoleCountsByRoom[roomName]) {
+      plannedRoleCountsByRoom[roomName] = {};
+    }
+    if (!plannedBootstrappersByRoomTarget[roomName]) {
+      plannedBootstrappersByRoomTarget[roomName] = {};
+    }
+
+    const roomCreeps = getCreepsByHomeRoom(roomName);
+    const role = nextRoleToSpawn(spawn, roomRoleCounts[roomName], plannedRoleCountsByRoom[roomName]);
+    if (!role) continue;
+
     const bootstrapTargetRoom =
-      role === "bootstrapper" ? pickBootstrapTargetRoom(spawn.room.name, strategy.bootstrapTargetRooms) : undefined;
+      role === "bootstrapper"
+        ? pickBootstrapTargetRoom(
+            strategy.bootstrapTargetRooms,
+            roomCreeps,
+            plannedBootstrappersByRoomTarget[roomName]
+          )
+        : undefined;
     if (role === "bootstrapper" && !bootstrapTargetRoom) continue;
 
-    const localEmergency = getEmergencySoldierCount(spawn.room.name);
+    const localEmergency = getEmergencySoldierCount(roomName);
     const reinforcementTargetRoom =
-      role === "soldier" && localEmergency === 0 ? pickReinforcementTarget(spawn.room.name) : undefined;
+      role === "soldier" && localEmergency === 0
+        ? pickReinforcementTarget(roomName, allCreeps, plannedDefendersByTargetRoom)
+        : undefined;
 
     const targetRoom = bootstrapTargetRoom ?? reinforcementTargetRoom;
 
@@ -208,36 +303,63 @@ export function runSpawnManager(): void {
     const minFillRatio = 1 - reserveRatio;
     const requiredEnergy = Math.ceil(spawn.room.energyCapacityAvailable * minFillRatio);
     const roleMinEnergy = minimumEnergyForRole(spawn, role);
-    const bypassEnergyGate = shouldBypassEnergyGate(spawn, role);
+    const bypassEnergyGate = shouldBypassEnergyGate(
+      spawn,
+      role,
+      roomRoleCounts[roomName],
+      plannedRoleCountsByRoom[roomName]
+    );
     if (!bypassEnergyGate && spawn.room.energyAvailable < Math.max(requiredEnergy, roleMinEnergy)) continue;
 
-    const energyBudget = spawn.room.energyAvailable;
-    const body = buildBody(role, energyBudget);
+    const body = buildBody(role, spawn.room.energyAvailable);
     if (!body) continue;
 
     const sourceId =
       role === "miner"
-        ? pickDedicatedSource(spawn.room.name, "miner", Math.max(1, COLONY_SETTINGS.planner.minersPerSource), false)
+        ? pickDedicatedSource(
+            roomName,
+            "miner",
+            Math.max(1, COLONY_SETTINGS.planner.minersPerSource),
+            false,
+            roomCreeps
+          )
         : role === "hauler"
           ? pickDedicatedSource(
-              spawn.room.name,
+              roomName,
               "hauler",
               Math.max(0, COLONY_SETTINGS.planner.dedicatedHaulersPerSource),
-              true
+              true,
+              roomCreeps
             )
           : undefined;
     const lockSource = sourceId !== undefined;
 
-    const name = `${role}-${spawn.room.name}-${Game.time}`;
-    spawn.spawnCreep(body, name, {
+    const name = uniqueSpawnName(spawn, role);
+    const result = spawn.spawnCreep(body, name, {
       memory: {
         role,
-        homeRoom: spawn.room.name,
+        homeRoom: roomName,
         working: false,
         targetRoom,
         sourceId,
         lockSource
       }
     });
+
+    if (result === OK) {
+      plannedRoleCountsByRoom[roomName][role] = (plannedRoleCountsByRoom[roomName][role] ?? 0) + 1;
+      if (role === "bootstrapper" && targetRoom) {
+        plannedBootstrappersByRoomTarget[roomName][targetRoom] =
+          (plannedBootstrappersByRoomTarget[roomName][targetRoom] ?? 0) + 1;
+      }
+      if (role === "soldier" && targetRoom) {
+        plannedDefendersByTargetRoom[targetRoom] = (plannedDefendersByTargetRoom[targetRoom] ?? 0) + 1;
+      }
+      continue;
+    }
+
+    if (result !== ERR_BUSY && result !== ERR_NOT_ENOUGH_ENERGY && result !== ERR_NAME_EXISTS) {
+      console.log(`[spawn][${spawn.name}] failed role=${role} code=${result}`);
+    }
   }
 }

@@ -1,5 +1,6 @@
 import { fillPriorityEnergyTargets, pickupDroppedEnergy, withdrawStoredEnergy } from "../tasks/energy";
 import { COLONY_SETTINGS } from "../config/settings";
+import { moveToTarget } from "../tasks/movement";
 import { updateWorkingState } from "./common";
 
 function isNearSourcePosition(pos: RoomPosition, source: Source | null, range: number): boolean {
@@ -29,7 +30,7 @@ function withdrawFromSourceExtensions(creep: Creep, assignedSource: Source | nul
 
   const result = creep.withdraw(target, RESOURCE_ENERGY);
   if (result === ERR_NOT_IN_RANGE) {
-    creep.moveTo(target, { reusePath: 15, visualizePathStyle: { stroke: "#219ebc" } });
+    moveToTarget(creep, target);
     return true;
   }
 
@@ -53,7 +54,7 @@ function withdrawFromSourceContainers(creep: Creep, assignedSource: Source | nul
 
   const result = creep.withdraw(target, RESOURCE_ENERGY);
   if (result === ERR_NOT_IN_RANGE) {
-    creep.moveTo(target, { reusePath: 15, visualizePathStyle: { stroke: "#219ebc" } });
+    moveToTarget(creep, target);
     return true;
   }
 
@@ -80,7 +81,7 @@ function fillCoreEnergyTargets(creep: Creep): boolean {
 
   const result = creep.transfer(target, RESOURCE_ENERGY);
   if (result === ERR_NOT_IN_RANGE) {
-    creep.moveTo(target, { reusePath: 10, visualizePathStyle: { stroke: "#219ebc" } });
+    moveToTarget(creep, target);
     return true;
   }
 

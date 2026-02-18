@@ -1,7 +1,10 @@
 import { harvestEnergy, pickupDroppedEnergy, withdrawStoredEnergy } from "../tasks/energy";
 
-export function updateWorkingState(creep: Creep): void {
-  if (creep.memory.working && creep.store.getUsedCapacity(RESOURCE_ENERGY) === 0) {
+type WorkingResourceMode = ResourceConstant | "any";
+
+export function updateWorkingState(creep: Creep, mode: WorkingResourceMode = RESOURCE_ENERGY): void {
+  const usedCapacity = mode === "any" ? creep.store.getUsedCapacity() : creep.store.getUsedCapacity(mode);
+  if (creep.memory.working && usedCapacity === 0) {
     creep.memory.working = false;
   }
 

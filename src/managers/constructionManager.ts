@@ -1,5 +1,6 @@
 import { COLONY_SETTINGS } from "../config/settings";
 import { getRoomAnchor } from "../colony/layoutPlanner";
+import { getOwnedRooms } from "../runtime/tickCache";
 import { roomMineral } from "../tasks/minerals";
 
 const CORE_RESERVED_OFFSETS = new Set<string>([
@@ -63,17 +64,17 @@ const CORE_EXTENSION_OFFSETS: Array<[number, number]> = [
   [-4, -2]
 ];
 
-function placeIfFree(room: Room, x: number, y: number, structureType: BuildableStructureConstant): void {
-  if (x < 1 || x > 48 || y < 1 || y > 48) return;
-  if (room.getTerrain().get(x, y) === TERRAIN_MASK_WALL) return;
+function placeIfFree(room: Room, x: number, y: number, structureType: BuildableStructureConstant): boolean {
+  if (x < 1 || x > 48 || y < 1 || y > 48) return false;
+  if (room.getTerrain().get(x, y) === TERRAIN_MASK_WALL) return false;
 
   const look = room.lookForAt(LOOK_STRUCTURES, x, y);
-  if (look.length > 0) return;
+  if (look.length > 0) return false;
 
   const sites = room.lookForAt(LOOK_CONSTRUCTION_SITES, x, y);
-  if (sites.length > 0) return;
+  if (sites.length > 0) return false;
 
-  room.createConstructionSite(x, y, structureType);
+  return room.createConstructionSite(x, y, structureType) === OK;
 }
 
 function extensionBuiltAndSiteCount(room: Room): number {
@@ -329,10 +330,7 @@ function placeSourceContainers(room: Room, anchor: RoomPosition): void {
 
     const candidates = containerCandidatesNearSource(room, anchor, source);
     for (const [x, y] of candidates) {
-      const before = structureBuiltAndSiteCount(room, STRUCTURE_CONTAINER);
-      placeIfFree(room, x, y, STRUCTURE_CONTAINER);
-      const after = structureBuiltAndSiteCount(room, STRUCTURE_CONTAINER);
-      if (after > before) {
+      if (placeIfFree(room, x, y, STRUCTURE_CONTAINER)) {
         break;
       }
     }
@@ -413,10 +411,7 @@ function placeLabCluster(room: Room, anchor: RoomPosition): void {
 
   for (const [dx, dy] of offsets) {
     if (remaining <= 0) break;
-    const before = structureBuiltAndSiteCount(room, STRUCTURE_LAB);
-    placeIfFree(room, anchor.x + dx, anchor.y + dy, STRUCTURE_LAB);
-    const after = structureBuiltAndSiteCount(room, STRUCTURE_LAB);
-    if (after > before) {
+    if (placeIfFree(room, anchor.x + dx, anchor.y + dy, STRUCTURE_LAB)) {
       remaining -= 1;
     }
   }
@@ -438,10 +433,7 @@ function placeSourceAndControllerLinks(room: Room, anchor: RoomPosition): void {
       const path = anchor.findPathTo(room.controller.pos, { ignoreCreeps: true });
       const finalStep = path[path.length - 1];
       if (finalStep) {
-        const before = structureBuiltAndSiteCount(room, STRUCTURE_LINK);
-        placeIfFree(room, finalStep.x, finalStep.y, STRUCTURE_LINK);
-        const after = structureBuiltAndSiteCount(room, STRUCTURE_LINK);
-        if (after > before) {
+        if (placeIfFree(room, finalStep.x, finalStep.y, STRUCTURE_LINK)) {
           remaining -= 1;
         }
       }
@@ -465,10 +457,7 @@ function placeSourceAndControllerLinks(room: Room, anchor: RoomPosition): void {
     const finalStep = path[path.length - 1];
     if (!finalStep) continue;
 
-    const before = structureBuiltAndSiteCount(room, STRUCTURE_LINK);
-    placeIfFree(room, finalStep.x, finalStep.y, STRUCTURE_LINK);
-    const after = structureBuiltAndSiteCount(room, STRUCTURE_LINK);
-    if (after > before) {
+    if (placeIfFree(room, finalStep.x, finalStep.y, STRUCTURE_LINK)) {
       remaining -= 1;
     }
   }
@@ -526,8 +515,7 @@ function placeDefensiveRing(room: Room, anchor: RoomPosition): void {
 export function runConstructionManager(): void {
   if (Game.time % COLONY_SETTINGS.construction.runInterval !== 0) return;
 
-  for (const room of Object.values(Game.rooms)) {
-    if (!room.controller?.my) continue;
+  for (const room of getOwnedRooms()) {
 
     const strategy = Memory.strategy?.[room.name];
     if (!strategy) continue;
@@ -543,8 +531,8 @@ export function runConstructionManager(): void {
         filter: (site: ConstructionSite) => site.structureType === STRUCTURE_SPAWN
       }).length;
 
-      if (!hasSpawn && hasSpawnSite === 0) {
-        room.createConstructionSite(anchor.x, anchor.y, STRUCTURE_SPAWN);
+      if (!hasSpawn && hasSpawnSite === 0 && room.find(FIND_CONSTRUCTION_SITES).length < maxSites) {
+        placeIfFree(room, anchor.x, anchor.y, STRUCTURE_SPAWN);
       }
     }
 
@@ -555,24 +543,33 @@ export function runConstructionManager(): void {
     placeSourceContainers(room, anchor);
 
     const siteCountAfterContainers = room.find(FIND_CONSTRUCTION_SITES).length;
-    if (siteCountAfterContainers > nonContainerSiteBudget) continue;
+    if (siteCountAfterContainers >= nonContainerSiteBudget) continue;
+    if (siteCountAfterContainers >= maxSites) continue;
 
     placeSourceExtensions(room, anchor);
+    if (room.find(FIND_CONSTRUCTION_SITES).length >= maxSites) continue;
     placeCoreExtensions(room, anchor);
+    if (room.find(FIND_CONSTRUCTION_SITES).length >= maxSites) continue;
     placeCoreLogistics(room, anchor);
+    if (room.find(FIND_CONSTRUCTION_SITES).length >= maxSites) continue;
     placeLabCluster(room, anchor);
+    if (room.find(FIND_CONSTRUCTION_SITES).length >= maxSites) continue;
     placeSourceAndControllerLinks(room, anchor);
+    if (room.find(FIND_CONSTRUCTION_SITES).length >= maxSites) continue;
     placeMineralInfrastructure(room, anchor);
 
     if (strategy.capabilities.allowRoads) {
+      if (room.find(FIND_CONSTRUCTION_SITES).length >= maxSites) continue;
       placeRoadsFromAnchor(room, anchor);
     }
 
     if (strategy.capabilities.allowTowers) {
+      if (room.find(FIND_CONSTRUCTION_SITES).length >= maxSites) continue;
       placeTowers(room, anchor);
     }
 
     if (strategy.capabilities.allowWalls) {
+      if (room.find(FIND_CONSTRUCTION_SITES).length >= maxSites) continue;
       placeDefensiveRing(room, anchor);
     }
   }

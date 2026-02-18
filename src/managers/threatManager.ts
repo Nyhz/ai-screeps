@@ -1,4 +1,5 @@
 import { COLONY_SETTINGS } from "../config/settings";
+import { getOwnedRooms } from "../runtime/tickCache";
 
 function partWeight(part: BodyPartConstant): number {
   switch (part) {
@@ -207,8 +208,7 @@ export function getEmergencySoldierCount(roomName: string): number {
 }
 
 export function runThreatManager(): void {
-  for (const room of Object.values(Game.rooms)) {
-    if (!room.controller?.my) continue;
+  for (const room of getOwnedRooms()) {
     refreshThreatForRoom(room);
   }
 }

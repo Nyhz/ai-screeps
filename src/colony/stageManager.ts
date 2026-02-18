@@ -1,5 +1,6 @@
 import { STAGE_THRESHOLDS, type CapabilityFlags, type ColonyStage } from "../config/colonyStages";
 import { COLONY_SETTINGS, resolveRoomSettings } from "../config/settings";
+import { getOwnedRooms } from "../runtime/tickCache";
 import type { RoomSnapshot } from "./types";
 
 function deriveStage(snapshot: RoomSnapshot): ColonyStage {
@@ -13,7 +14,7 @@ function deriveStage(snapshot: RoomSnapshot): ColonyStage {
 }
 
 function ownedRoomCount(): number {
-  return Object.values(Game.rooms).filter((room) => room.controller?.my).length;
+  return getOwnedRooms().length;
 }
 
 function canExpand(snapshot: RoomSnapshot): boolean {

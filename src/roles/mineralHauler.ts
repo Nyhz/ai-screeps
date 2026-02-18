@@ -2,7 +2,7 @@ import { pickupDroppedMinerals, transferCarriedMinerals, withdrawMineralsFromCon
 import { updateWorkingState } from "./common";
 
 export function runMineralHauler(creep: Creep): void {
-  updateWorkingState(creep);
+  updateWorkingState(creep, "any");
 
   if (!creep.memory.working) {
     if (withdrawMineralsFromContainer(creep)) return;
