@@ -37,6 +37,10 @@ function assignSource(creep: Creep): Source | null {
 
   const existing =
     creep.memory.sourceId !== undefined ? Game.getObjectById(creep.memory.sourceId as Id<Source>) : null;
+  if (existing && creep.memory.lockSource) {
+    return existing;
+  }
+
   const shouldRebalance = Game.time % 25 === 0;
   if (existing && !shouldRebalance) {
     return existing;
@@ -78,12 +82,16 @@ export function harvestEnergy(creep: Creep): boolean {
 export function withdrawStoredEnergy(creep: Creep): boolean {
   const target = creep.pos.findClosestByPath(FIND_STRUCTURES, {
     filter: (structure: Structure) => {
-      if (structure.structureType === STRUCTURE_STORAGE || structure.structureType === STRUCTURE_CONTAINER) {
-        return (structure as StructureStorage | StructureContainer).store.getUsedCapacity(RESOURCE_ENERGY) > 0;
+      if (
+        structure.structureType === STRUCTURE_STORAGE ||
+        structure.structureType === STRUCTURE_CONTAINER ||
+        structure.structureType === STRUCTURE_EXTENSION
+      ) {
+        return (structure as StructureStorage | StructureContainer | StructureExtension).store.getUsedCapacity(RESOURCE_ENERGY) > 0;
       }
       return false;
     }
-  }) as StructureStorage | StructureContainer | null;
+  }) as StructureStorage | StructureContainer | StructureExtension | null;
 
   if (!target) return false;
 

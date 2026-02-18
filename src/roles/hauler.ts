@@ -2,16 +2,24 @@ import { fillPriorityEnergyTargets, pickupDroppedEnergy, withdrawStoredEnergy } 
 import { COLONY_SETTINGS } from "../config/settings";
 import { updateWorkingState } from "./common";
 
+function isNearSourcePosition(pos: RoomPosition, source: Source | null, range: number): boolean {
+  if (!source) return false;
+  return pos.getRangeTo(source) <= range;
+}
+
 function isNearAnySource(room: Room, pos: RoomPosition, range = 2): boolean {
   const sources = room.find(FIND_SOURCES);
   return sources.some((source) => pos.getRangeTo(source) <= range);
 }
 
-function withdrawFromSourceExtensions(creep: Creep): boolean {
+function withdrawFromSourceExtensions(creep: Creep, assignedSource: Source | null): boolean {
   const target = creep.pos.findClosestByPath(FIND_MY_STRUCTURES, {
     filter: (structure: Structure) => {
       if (structure.structureType !== STRUCTURE_EXTENSION) return false;
-      if (!isNearAnySource(creep.room, structure.pos, 2)) return false;
+      const isValidSourceExtension = assignedSource
+        ? isNearSourcePosition(structure.pos, assignedSource, 2)
+        : isNearAnySource(creep.room, structure.pos, 2);
+      if (!isValidSourceExtension) return false;
       const extension = structure as StructureExtension;
       return extension.store.getUsedCapacity(RESOURCE_ENERGY) > 0;
     }
@@ -28,11 +36,14 @@ function withdrawFromSourceExtensions(creep: Creep): boolean {
   return result === OK;
 }
 
-function withdrawFromSourceContainers(creep: Creep): boolean {
+function withdrawFromSourceContainers(creep: Creep, assignedSource: Source | null): boolean {
   const target = creep.pos.findClosestByPath(FIND_STRUCTURES, {
     filter: (structure: Structure) => {
       if (structure.structureType !== STRUCTURE_CONTAINER) return false;
-      if (!isNearAnySource(creep.room, structure.pos, 1)) return false;
+      const isValidSourceContainer = assignedSource
+        ? isNearSourcePosition(structure.pos, assignedSource, 1)
+        : isNearAnySource(creep.room, structure.pos, 1);
+      if (!isValidSourceContainer) return false;
       const container = structure as StructureContainer;
       return container.store.getUsedCapacity(RESOURCE_ENERGY) >= COLONY_SETTINGS.energy.haulerContainerWithdrawMinEnergy;
     }
@@ -78,12 +89,21 @@ function fillCoreEnergyTargets(creep: Creep): boolean {
 
 export function runHauler(creep: Creep): void {
   updateWorkingState(creep);
+  const assignedSource =
+    creep.memory.lockSource && creep.memory.sourceId
+      ? Game.getObjectById(creep.memory.sourceId as Id<Source>)
+      : null;
+  const isDedicated = Boolean(assignedSource);
 
   if (!creep.memory.working) {
-    if (withdrawFromSourceExtensions(creep)) return;
-    if (withdrawFromSourceContainers(creep)) return;
-    if (withdrawStoredEnergy(creep)) return;
-    pickupDroppedEnergy(creep);
+    if (withdrawFromSourceExtensions(creep, assignedSource)) return;
+    if (withdrawFromSourceContainers(creep, assignedSource)) return;
+
+    if (!isDedicated) {
+      if (withdrawStoredEnergy(creep)) return;
+      pickupDroppedEnergy(creep);
+    }
+
     return;
   }
 

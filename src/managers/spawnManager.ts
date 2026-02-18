@@ -78,8 +78,8 @@ function shouldBypassEnergyGate(spawn: StructureSpawn, role: RoleName): boolean 
 
 function minimumEnergyForRole(spawn: StructureSpawn, role: RoleName): number {
   if (role !== "miner") return 0;
-  // 550 energy allows miner body to reach 5 WORK for full source saturation.
-  return Math.min(spawn.room.energyCapacityAvailable, 550);
+  // 400 energy is required for miner baseline body with 3 WORK.
+  return Math.min(spawn.room.energyCapacityAvailable, 400);
 }
 
 function pickBootstrapTargetRoom(homeRoom: string, targets: string[]): string | undefined {
@@ -140,6 +140,50 @@ function pickReinforcementTarget(homeRoom: string): string | undefined {
   return bestTarget;
 }
 
+function sourceIdsInHomeRoom(homeRoom: string): Id<Source>[] {
+  const room = Game.rooms[homeRoom];
+  if (!room) return [];
+  return room.find(FIND_SOURCES).map((source) => source.id);
+}
+
+function assignedSourceWorkerCount(
+  homeRoom: string,
+  role: "miner" | "hauler",
+  sourceId: Id<Source>,
+  onlyLocked: boolean
+): number {
+  return Object.values(Game.creeps).filter((creep) => {
+    if (creep.memory.homeRoom !== homeRoom) return false;
+    if (creep.memory.role !== role) return false;
+    if (creep.memory.sourceId !== sourceId) return false;
+    if (onlyLocked && !creep.memory.lockSource) return false;
+    return true;
+  }).length;
+}
+
+function pickDedicatedSource(
+  homeRoom: string,
+  role: "miner" | "hauler",
+  desiredPerSource: number,
+  onlyLocked: boolean
+): Id<Source> | undefined {
+  const sourceIds = sourceIdsInHomeRoom(homeRoom);
+  if (sourceIds.length === 0 || desiredPerSource <= 0) return undefined;
+
+  let bestSourceId: Id<Source> | undefined;
+  let bestCount = Number.MAX_SAFE_INTEGER;
+  for (const sourceId of sourceIds) {
+    const count = assignedSourceWorkerCount(homeRoom, role, sourceId, onlyLocked);
+    if (count < bestCount) {
+      bestCount = count;
+      bestSourceId = sourceId;
+    }
+  }
+
+  if (bestCount >= desiredPerSource) return undefined;
+  return bestSourceId;
+}
+
 export function runSpawnManager(): void {
   const spawns = Object.values(Game.spawns);
   for (const spawn of spawns) {
@@ -171,13 +215,28 @@ export function runSpawnManager(): void {
     const body = buildBody(role, energyBudget);
     if (!body) continue;
 
+    const sourceId =
+      role === "miner"
+        ? pickDedicatedSource(spawn.room.name, "miner", Math.max(1, COLONY_SETTINGS.planner.minersPerSource), false)
+        : role === "hauler"
+          ? pickDedicatedSource(
+              spawn.room.name,
+              "hauler",
+              Math.max(0, COLONY_SETTINGS.planner.dedicatedHaulersPerSource),
+              true
+            )
+          : undefined;
+    const lockSource = sourceId !== undefined;
+
     const name = `${role}-${spawn.room.name}-${Game.time}`;
     spawn.spawnCreep(body, name, {
       memory: {
         role,
         homeRoom: spawn.room.name,
         working: false,
-        targetRoom
+        targetRoom,
+        sourceId,
+        lockSource
       }
     });
   }

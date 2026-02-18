@@ -53,7 +53,9 @@ export const COLONY_SETTINGS = {
   planner: {
     minHarvesters: 2,
     baseHaulers: 2,
-    haulersPerSource: 1,
+    minersPerSource: 2,
+    dedicatedHaulersPerSource: 1,
+    freeHaulers: 1,
     baseUpgraders: 1,
     buildersWhenSitesExist: 2,
     buildersWhenNoSites: 1,

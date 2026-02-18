@@ -9,7 +9,7 @@ export interface BodyBlueprint {
 export const ROLE_BODIES: Record<RoleName, BodyBlueprint> = {
   harvester: { min: [WORK, CARRY, MOVE], segment: [WORK, CARRY, MOVE], maxSegments: 6 },
   hauler: { min: [CARRY, CARRY, MOVE], segment: [CARRY, CARRY, MOVE], maxSegments: 8 },
-  miner: { min: [WORK, WORK, CARRY, MOVE], segment: [WORK, WORK, MOVE], maxSegments: 4 },
+  miner: { min: [WORK, WORK, WORK, CARRY, MOVE], segment: [WORK, MOVE], maxSegments: 6 },
   mineralMiner: { min: [WORK, WORK, CARRY, MOVE], segment: [WORK, WORK, MOVE], maxSegments: 4 },
   mineralHauler: { min: [CARRY, CARRY, MOVE], segment: [CARRY, CARRY, MOVE], maxSegments: 8 },
   upgrader: { min: [WORK, CARRY, MOVE], segment: [WORK, CARRY, MOVE], maxSegments: 8 },

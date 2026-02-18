@@ -242,6 +242,27 @@ function extensionCandidatesNearSource(room: Room, anchor: RoomPosition, source:
   return positions;
 }
 
+function containerCandidatesNearSource(room: Room, anchor: RoomPosition, source: Source): Array<[number, number]> {
+  const terrain = room.getTerrain();
+  const positions: Array<[number, number]> = [];
+
+  for (let dx = -1; dx <= 1; dx += 1) {
+    for (let dy = -1; dy <= 1; dy += 1) {
+      if (dx === 0 && dy === 0) continue;
+
+      const x = source.pos.x + dx;
+      const y = source.pos.y + dy;
+      if (x < 1 || x > 48 || y < 1 || y > 48) continue;
+      if (terrain.get(x, y) === TERRAIN_MASK_WALL) continue;
+
+      positions.push([x, y]);
+    }
+  }
+
+  positions.sort((a, b) => anchor.getRangeTo(a[0], a[1]) - anchor.getRangeTo(b[0], b[1]));
+  return positions;
+}
+
 function placeSourceExtensions(room: Room, anchor: RoomPosition): void {
   const max = maxExtensions(room);
   if (max === 0) return;
@@ -300,14 +321,21 @@ function placeSourceContainers(room: Room, anchor: RoomPosition): void {
     const hasContainer = source.pos.findInRange(FIND_STRUCTURES, 1, {
       filter: (structure: Structure) => structure.structureType === STRUCTURE_CONTAINER
     }).length;
+    const hasContainerSite = source.pos.findInRange(FIND_CONSTRUCTION_SITES, 1, {
+      filter: (site: ConstructionSite) => site.structureType === STRUCTURE_CONTAINER
+    }).length;
 
-    if (hasContainer > 0) continue;
+    if (hasContainer + hasContainerSite > 0) continue;
 
-    const path = anchor.findPathTo(source.pos, { ignoreCreeps: true });
-    const finalStep = path[path.length - 1];
-    if (!finalStep) continue;
-
-    placeIfFree(room, finalStep.x, finalStep.y, STRUCTURE_CONTAINER);
+    const candidates = containerCandidatesNearSource(room, anchor, source);
+    for (const [x, y] of candidates) {
+      const before = structureBuiltAndSiteCount(room, STRUCTURE_CONTAINER);
+      placeIfFree(room, x, y, STRUCTURE_CONTAINER);
+      const after = structureBuiltAndSiteCount(room, STRUCTURE_CONTAINER);
+      if (after > before) {
+        break;
+      }
+    }
   }
 }
 

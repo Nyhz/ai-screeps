@@ -27,6 +27,7 @@ declare global {
     homeRoom: string;
     working?: boolean;
     sourceId?: Id<Source>;
+    lockSource?: boolean;
     targetRoom?: string;
   }
 
