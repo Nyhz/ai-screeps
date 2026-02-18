@@ -4,6 +4,8 @@ type RoleName =
   | "harvester"
   | "hauler"
   | "miner"
+  | "mineralMiner"
+  | "mineralHauler"
   | "upgrader"
   | "builder"
   | "repairer"
@@ -11,6 +13,7 @@ type RoleName =
   | "scout"
   | "reserver"
   | "claimer"
+  | "bootstrapper"
   | "soldier";
 
 type ColonyStage = "bootstrap" | "early" | "mid" | "late";
@@ -21,6 +24,7 @@ declare global {
     homeRoom: string;
     working?: boolean;
     sourceId?: Id<Source>;
+    targetRoom?: string;
   }
 
   interface RoomStrategyMemory {
@@ -37,10 +41,21 @@ declare global {
     scoutTargetRooms: string[];
     reserveTargetRooms: string[];
     claimTargetRooms: string[];
+    bootstrapTargetRooms: string[];
     attackTargetRooms: string[];
   }
 
   interface Memory {
     strategy?: Record<string, RoomStrategyMemory>;
+    expansionState?: Record<string, Record<string, "pendingClaim" | "claimedNoSpawn" | "spawnEstablished">>;
+    roomPlans?: Record<
+      string,
+      {
+        anchorX: number;
+        anchorY: number;
+        score: number;
+        createdAt: number;
+      }
+    >;
   }
 }

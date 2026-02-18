@@ -21,5 +21,6 @@ export interface ColonyStrategy {
   scoutTargetRooms: string[];
   reserveTargetRooms: string[];
   claimTargetRooms: string[];
+  bootstrapTargetRooms: string[];
   attackTargetRooms: string[];
 }

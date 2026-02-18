@@ -29,6 +29,8 @@ var ROLE_ORDER = [
   "harvester",
   "hauler",
   "miner",
+  "mineralMiner",
+  "mineralHauler",
   "upgrader",
   "builder",
   "repairer",
@@ -36,6 +38,7 @@ var ROLE_ORDER = [
   "scout",
   "reserver",
   "claimer",
+  "bootstrapper",
   "soldier"
 ];
 
@@ -93,6 +96,7 @@ var COLONY_SETTINGS = {
   planner: {
     minHarvesters: 2,
     baseHaulers: 1,
+    haulersPerSource: 1,
     baseUpgraders: 1,
     buildersWhenSitesExist: 2,
     buildersWhenNoSites: 1,
@@ -113,7 +117,12 @@ var COLONY_SETTINGS = {
   },
   construction: {
     runInterval: 37,
-    maxRoomConstructionSites: 10
+    maxRoomConstructionSites: 10,
+    autoPlaceSpawnInClaimedRooms: true,
+    sourceExtensionsPerSource: 2,
+    sourceExtensionsMinRcl: 3,
+    requireEnergyCapForSourceExtensions: true,
+    sourceExtensionMaxAvgFillRatioToExpand: 0.4
   },
   defense: {
     wallRepairCap: 2e5,
@@ -135,9 +144,44 @@ var COLONY_SETTINGS = {
     pickupDroppedEnergyMinAmount: 50,
     haulerContainerWithdrawMinEnergy: 100
   },
+  minerals: {
+    enabled: true,
+    minRcl: 6,
+    requireStorage: true,
+    minerCount: 1,
+    haulerCount: 1,
+    containerWithdrawMin: 50,
+    allowTerminalFallback: true,
+    allowContainerFallback: true
+  },
   movement: {
     maxRoomsPerPath: 16,
     defaultRange: 1
+  },
+  logistics: {
+    coreDeliveryRangeFromSpawn: 8
+  },
+  links: {
+    enabled: true,
+    minRcl: 5,
+    senderMinEnergy: 400,
+    receiverMinFreeCapacity: 200,
+    controllerLinkTargetLevel: 600
+  },
+  layout: {
+    scanMin: 6,
+    scanMax: 43,
+    minEdgeDistance: 4,
+    desiredControllerRange: 8,
+    desiredSourceRange: 8
+  },
+  expansion: {
+    autoClaimNeighbors: false,
+    maxConcurrentBootstrapRoomsPerHome: 1,
+    bootstrapperCountPerTargetRoom: 2,
+    manualClaimTargetsByRoom: {
+      E18N7: []
+    }
   },
   roleTargets: {
     default: {},
@@ -186,6 +230,54 @@ function isRemoteRoomAllowed(homeRoom, targetRoom) {
   }
   return true;
 }
+function getManualClaimTargets(homeRoom) {
+  var _a;
+  return unique((_a = COLONY_SETTINGS.expansion.manualClaimTargetsByRoom[homeRoom]) != null ? _a : []);
+}
+function ensureExpansionState(homeRoom) {
+  if (!Memory.expansionState) {
+    Memory.expansionState = {};
+  }
+  if (!Memory.expansionState[homeRoom]) {
+    Memory.expansionState[homeRoom] = {};
+  }
+  return Memory.expansionState[homeRoom];
+}
+function inferExpansionState(targetRoom) {
+  const room = Game.rooms[targetRoom];
+  if (!(room == null ? void 0 : room.controller)) return null;
+  if (!room.controller.my) return "pendingClaim";
+  return room.find(FIND_MY_SPAWNS).length > 0 ? "spawnEstablished" : "claimedNoSpawn";
+}
+function syncExpansionStateForHome(homeRoom) {
+  const state = ensureExpansionState(homeRoom);
+  const targets = getManualClaimTargets(homeRoom);
+  for (const targetRoom of targets) {
+    if (!state[targetRoom]) {
+      state[targetRoom] = "pendingClaim";
+    }
+    const inferred = inferExpansionState(targetRoom);
+    if (!inferred) continue;
+    state[targetRoom] = inferred;
+  }
+}
+function markManualTargetClaimed(homeRoom, targetRoom) {
+  const state = ensureExpansionState(homeRoom);
+  state[targetRoom] = "claimedNoSpawn";
+}
+function getPendingManualClaimTargets(homeRoom) {
+  syncExpansionStateForHome(homeRoom);
+  const state = ensureExpansionState(homeRoom);
+  return getManualClaimTargets(homeRoom).filter((roomName) => state[roomName] === "pendingClaim");
+}
+function getBootstrapTargetRooms(homeRoom) {
+  syncExpansionStateForHome(homeRoom);
+  const state = ensureExpansionState(homeRoom);
+  const targets = getManualClaimTargets(homeRoom).filter((roomName) => state[roomName] === "claimedNoSpawn");
+  const limit = Math.max(0, COLONY_SETTINGS.expansion.maxConcurrentBootstrapRoomsPerHome);
+  if (limit === 0) return [];
+  return targets.slice(0, limit);
+}
 function getWallTargetHits(rcl) {
   const target = COLONY_SETTINGS.walls.targetHitsByRcl[rcl];
   if (target) return target;
@@ -207,6 +299,19 @@ function applyRoleOverrides(target, overrides) {
     target[role] = Math.max(0, desired);
   }
 }
+function shouldRunMineralPipeline(snapshot) {
+  if (!COLONY_SETTINGS.minerals.enabled) return false;
+  if (snapshot.rcl < COLONY_SETTINGS.minerals.minRcl) return false;
+  const room = Game.rooms[snapshot.roomName];
+  if (!room) return false;
+  if (COLONY_SETTINGS.minerals.requireStorage && !room.storage) return false;
+  const mineral = room.find(FIND_MINERALS)[0];
+  return Boolean(mineral && mineral.mineralAmount > 0);
+}
+function shouldSpawnClaimer(snapshot) {
+  if (COLONY_SETTINGS.expansion.autoClaimNeighbors) return true;
+  return getPendingManualClaimTargets(snapshot.roomName).length > 0;
+}
 function deriveDesiredRoles(snapshot, stage, capabilities) {
   var _a, _b;
   const desired = baseDesired();
@@ -217,7 +322,11 @@ function deriveDesiredRoles(snapshot, stage, capabilities) {
   desired.builder = snapshot.constructionSiteCount > 0 ? COLONY_SETTINGS.planner.buildersWhenSitesExist : COLONY_SETTINGS.planner.buildersWhenNoSites;
   if (stage !== "bootstrap") {
     desired.miner = snapshot.sourceCount;
-    desired.hauler = Math.max(desired.hauler, snapshot.sourceCount, COLONY_SETTINGS.planner.baseHaulers);
+    desired.hauler = Math.max(
+      desired.hauler,
+      snapshot.sourceCount * COLONY_SETTINGS.planner.haulersPerSource,
+      COLONY_SETTINGS.planner.baseHaulers
+    );
     desired.upgrader = COLONY_SETTINGS.planner.upgradersByStage[stage];
     desired.builder = snapshot.constructionSiteCount > COLONY_SETTINGS.planner.heavyBuildSiteThreshold ? COLONY_SETTINGS.planner.heavyBuilderCount : desired.builder;
     desired.repairer = COLONY_SETTINGS.planner.repairersWhenEstablished;
@@ -229,14 +338,22 @@ function deriveDesiredRoles(snapshot, stage, capabilities) {
     desired.scout = COLONY_SETTINGS.planner.scoutCount;
     desired.reserver = COLONY_SETTINGS.planner.reserverCount;
   }
-  if (capabilities.allowExpansion) {
+  if (capabilities.allowExpansion && shouldSpawnClaimer(snapshot)) {
     desired.claimer = COLONY_SETTINGS.planner.claimerCount;
+  }
+  const bootstrapTargets = getBootstrapTargetRooms(snapshot.roomName);
+  if (bootstrapTargets.length > 0) {
+    desired.bootstrapper = bootstrapTargets.length * COLONY_SETTINGS.expansion.bootstrapperCountPerTargetRoom;
   }
   if (capabilities.allowOffense) {
     desired.soldier = Math.max(
       COLONY_SETTINGS.planner.minSoldiers,
       Math.ceil(snapshot.hostileCount / Math.max(1, COLONY_SETTINGS.planner.hostilesPerSoldier))
     );
+  }
+  if (shouldRunMineralPipeline(snapshot)) {
+    desired.mineralMiner = COLONY_SETTINGS.minerals.minerCount;
+    desired.mineralHauler = COLONY_SETTINGS.minerals.haulerCount;
   }
   applyRoleOverrides(desired, COLONY_SETTINGS.roleTargets.default);
   applyRoleOverrides(desired, (_a = COLONY_SETTINGS.roleTargets.byStage[stage]) != null ? _a : {});
@@ -308,11 +425,15 @@ function deriveTargetRooms(room, strategy) {
   const allowedRemoteNeighbors = visibleNeighbors.filter((name) => isRemoteRoomAllowed(room.name, name));
   const scoutTargetRooms = visibleNeighbors;
   const reserveTargetRooms = strategy.capabilities.allowRemoteMining ? allowedRemoteNeighbors : [];
-  const claimTargetRooms = strategy.capabilities.allowExpansion ? allowedRemoteNeighbors.filter((name) => {
+  const autoClaimTargetRooms = allowedRemoteNeighbors.filter((name) => {
     const targetRoom = Game.rooms[name];
     if (!(targetRoom == null ? void 0 : targetRoom.controller)) return true;
     return !targetRoom.controller.owner && !targetRoom.controller.reservation;
-  }) : [];
+  });
+  const manualClaimTargetRooms = getPendingManualClaimTargets(room.name);
+  const bootstrapTargetRooms = getBootstrapTargetRooms(room.name);
+  const desiredClaimList = COLONY_SETTINGS.expansion.autoClaimNeighbors ? autoClaimTargetRooms : manualClaimTargetRooms;
+  const claimTargetRooms = strategy.capabilities.allowExpansion && desiredClaimList.length > 0 ? [desiredClaimList[0]] : [];
   const attackTargetRooms = strategy.capabilities.allowOffense ? visibleNeighbors.filter((name) => {
     if (!isAttackAllowed(room.name, name)) return false;
     const targetRoom = Game.rooms[name];
@@ -324,6 +445,7 @@ function deriveTargetRooms(room, strategy) {
     scoutTargetRooms,
     reserveTargetRooms,
     claimTargetRooms,
+    bootstrapTargetRooms,
     attackTargetRooms
   };
 }
@@ -333,6 +455,7 @@ function runColonyManager() {
   var _a;
   for (const room of Object.values(Game.rooms)) {
     if (!((_a = room.controller) == null ? void 0 : _a.my)) continue;
+    syncExpansionStateForHome(room.name);
     const snapshot = collectRoomSnapshot(room);
     const { stage, capabilities } = deriveStageAndCapabilities(snapshot);
     const desiredRoles = deriveDesiredRoles(snapshot, stage, capabilities);
@@ -343,6 +466,7 @@ function runColonyManager() {
       scoutTargetRooms: [],
       reserveTargetRooms: [],
       claimTargetRooms: [],
+      bootstrapTargetRooms: [],
       attackTargetRooms: []
     };
     const resolved = deriveTargetRooms(room, baseStrategy);
@@ -353,46 +477,369 @@ function runColonyManager() {
   }
 }
 
+// src/colony/layoutPlanner.ts
+function isWalkable(room, x, y) {
+  if (x < 1 || x > 48 || y < 1 || y > 48) return false;
+  return room.getTerrain().get(x, y) !== TERRAIN_MASK_WALL;
+}
+function edgePenalty(x, y) {
+  const distanceToEdge = Math.min(x, 49 - x, y, 49 - y);
+  if (distanceToEdge >= COLONY_SETTINGS.layout.minEdgeDistance) return 0;
+  return (COLONY_SETTINGS.layout.minEdgeDistance - distanceToEdge) * 20;
+}
+function walkableAreaScore(room, x, y) {
+  let walkable = 0;
+  for (let dx = -4; dx <= 4; dx += 1) {
+    for (let dy = -4; dy <= 4; dy += 1) {
+      if (isWalkable(room, x + dx, y + dy)) {
+        walkable += 1;
+      }
+    }
+  }
+  return walkable * 2;
+}
+function distanceScore(distance, desired) {
+  return Math.max(0, 50 - Math.abs(distance - desired) * 4);
+}
+function scoreAnchor(room, x, y) {
+  if (!isWalkable(room, x, y)) return Number.NEGATIVE_INFINITY;
+  const look = room.lookForAt(LOOK_STRUCTURES, x, y);
+  if (look.length > 0) return Number.NEGATIVE_INFINITY;
+  let score = walkableAreaScore(room, x, y);
+  score -= edgePenalty(x, y);
+  const controller = room.controller;
+  if (controller) {
+    score += distanceScore(controller.pos.getRangeTo(x, y), COLONY_SETTINGS.layout.desiredControllerRange);
+  }
+  const sources = room.find(FIND_SOURCES);
+  for (const source of sources) {
+    score += distanceScore(source.pos.getRangeTo(x, y), COLONY_SETTINGS.layout.desiredSourceRange);
+  }
+  return score;
+}
+function bestAnchorCandidate(room) {
+  let best = null;
+  for (let x = COLONY_SETTINGS.layout.scanMin; x <= COLONY_SETTINGS.layout.scanMax; x += 1) {
+    for (let y = COLONY_SETTINGS.layout.scanMin; y <= COLONY_SETTINGS.layout.scanMax; y += 1) {
+      const score = scoreAnchor(room, x, y);
+      if (!Number.isFinite(score)) continue;
+      if (!best || score > best.score) {
+        best = { x, y, score };
+      }
+    }
+  }
+  return best;
+}
+function getRoomAnchor(room) {
+  if (!Memory.roomPlans) {
+    Memory.roomPlans = {};
+  }
+  const cached = Memory.roomPlans[room.name];
+  if (cached && isWalkable(room, cached.anchorX, cached.anchorY)) {
+    return new RoomPosition(cached.anchorX, cached.anchorY, room.name);
+  }
+  const spawn = room.find(FIND_MY_SPAWNS)[0];
+  if (spawn) {
+    Memory.roomPlans[room.name] = {
+      anchorX: spawn.pos.x,
+      anchorY: spawn.pos.y,
+      score: 0,
+      createdAt: Game.time
+    };
+    return spawn.pos;
+  }
+  const candidate = bestAnchorCandidate(room);
+  if (!candidate) return null;
+  Memory.roomPlans[room.name] = {
+    anchorX: candidate.x,
+    anchorY: candidate.y,
+    score: candidate.score,
+    createdAt: Game.time
+  };
+  return new RoomPosition(candidate.x, candidate.y, room.name);
+}
+
+// src/tasks/movement.ts
+function moveToTarget(creep, target, range = 1) {
+  creep.moveTo(target, {
+    reusePath: 10,
+    maxRooms: COLONY_SETTINGS.movement.maxRoomsPerPath,
+    range: range != null ? range : COLONY_SETTINGS.movement.defaultRange,
+    visualizePathStyle: { stroke: "#8ecae6" }
+  });
+}
+function moveToRoomCenter(creep, roomName) {
+  const target = new RoomPosition(25, 25, roomName);
+  moveToTarget(creep, target, 20);
+}
+
+// src/tasks/minerals.ts
+function nonEnergyResourcesInStore(store) {
+  const keys = Object.keys(store);
+  return keys.filter((resource) => resource !== RESOURCE_ENERGY && store.getUsedCapacity(resource) > 0);
+}
+function roomMineral(room) {
+  var _a;
+  return (_a = room.find(FIND_MINERALS)[0]) != null ? _a : null;
+}
+function roomMineralExtractor(room) {
+  const mineral = roomMineral(room);
+  if (!mineral) return null;
+  const structure = mineral.pos.lookFor(LOOK_STRUCTURES).find((entry) => entry.structureType === STRUCTURE_EXTRACTOR);
+  return structure != null ? structure : null;
+}
+function roomMineralContainer(room) {
+  var _a;
+  const mineral = roomMineral(room);
+  if (!mineral) return null;
+  const containers = mineral.pos.findInRange(FIND_STRUCTURES, 1, {
+    filter: (structure) => structure.structureType === STRUCTURE_CONTAINER
+  });
+  return (_a = containers[0]) != null ? _a : null;
+}
+function harvestMineral(creep) {
+  const mineral = roomMineral(creep.room);
+  if (!mineral || mineral.mineralAmount <= 0) return false;
+  const extractor = roomMineralExtractor(creep.room);
+  if (!extractor || extractor.cooldown > 0) return false;
+  const result = creep.harvest(mineral);
+  if (result === ERR_NOT_IN_RANGE) {
+    moveToTarget(creep, mineral);
+    return true;
+  }
+  return result === OK;
+}
+function withdrawMineralsFromContainer(creep) {
+  const container = creep.pos.findClosestByPath(FIND_STRUCTURES, {
+    filter: (structure) => {
+      if (structure.structureType !== STRUCTURE_CONTAINER) return false;
+      const store = structure.store;
+      const nonEnergyAmount = store.getUsedCapacity() - store.getUsedCapacity(RESOURCE_ENERGY);
+      return nonEnergyAmount >= COLONY_SETTINGS.minerals.containerWithdrawMin;
+    }
+  });
+  if (!container) return false;
+  const resources = nonEnergyResourcesInStore(container.store);
+  const resource = resources[0];
+  if (!resource) return false;
+  const result = creep.withdraw(container, resource);
+  if (result === ERR_NOT_IN_RANGE) {
+    moveToTarget(creep, container);
+    return true;
+  }
+  return result === OK;
+}
+function pickupDroppedMinerals(creep) {
+  const dropped = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
+    filter: (resource) => resource.resourceType !== RESOURCE_ENERGY && resource.amount > 0
+  });
+  if (!dropped) return false;
+  const result = creep.pickup(dropped);
+  if (result === ERR_NOT_IN_RANGE) {
+    moveToTarget(creep, dropped);
+    return true;
+  }
+  return result === OK;
+}
+function transferCarriedMinerals(creep) {
+  var _a, _b;
+  const target = (_b = (_a = creep.room.storage) != null ? _a : COLONY_SETTINGS.minerals.allowTerminalFallback ? creep.room.terminal : null) != null ? _b : COLONY_SETTINGS.minerals.allowContainerFallback ? creep.pos.findClosestByPath(FIND_STRUCTURES, {
+    filter: (structure) => structure.structureType === STRUCTURE_CONTAINER
+  }) : null;
+  if (!target) return false;
+  const resources = nonEnergyResourcesInStore(creep.store);
+  const resource = resources[0];
+  if (!resource) return false;
+  const result = creep.transfer(target, resource);
+  if (result === ERR_NOT_IN_RANGE) {
+    moveToTarget(creep, target);
+    return true;
+  }
+  return result === OK;
+}
+
 // src/managers/constructionManager.ts
+var CORE_RESERVED_OFFSETS = /* @__PURE__ */ new Set([
+  // Tower anchors (already managed by placeTowers).
+  "3,0",
+  "-3,0",
+  "0,3",
+  "0,-3",
+  // Endgame core anchors.
+  "1,1",
+  "1,-1",
+  "-1,1",
+  "-1,-1",
+  "0,2",
+  "2,0",
+  // Future lab corridor (kept clear intentionally).
+  "4,-1",
+  "4,0",
+  "4,1",
+  "5,-1",
+  "5,0",
+  "5,1",
+  "6,-1",
+  "6,0",
+  "6,1",
+  "5,2"
+]);
+var CORE_EXTENSION_OFFSETS = [
+  [2, 0],
+  [-2, 0],
+  [0, 2],
+  [0, -2],
+  [2, 2],
+  [2, -2],
+  [-2, 2],
+  [-2, -2],
+  [1, 3],
+  [-1, 3],
+  [1, -3],
+  [-1, -3],
+  [3, 1],
+  [3, -1],
+  [-3, 1],
+  [-3, -1],
+  [2, 3],
+  [-2, 3],
+  [2, -3],
+  [-2, -3],
+  [3, 2],
+  [3, -2],
+  [-3, 2],
+  [-3, -2],
+  [1, 4],
+  [-1, 4],
+  [1, -4],
+  [-1, -4],
+  [4, 2],
+  [4, -2],
+  [-4, 2],
+  [-4, -2]
+];
 function placeIfFree(room, x, y, structureType) {
   if (x < 1 || x > 48 || y < 1 || y > 48) return;
+  if (room.getTerrain().get(x, y) === TERRAIN_MASK_WALL) return;
   const look = room.lookForAt(LOOK_STRUCTURES, x, y);
   if (look.length > 0) return;
   const sites = room.lookForAt(LOOK_CONSTRUCTION_SITES, x, y);
   if (sites.length > 0) return;
   room.createConstructionSite(x, y, structureType);
 }
-function placeExtensions(room, anchor) {
+function extensionBuiltAndSiteCount(room) {
   var _a, _b, _c;
   const max = (_c = CONTROLLER_STRUCTURES[STRUCTURE_EXTENSION][(_b = (_a = room.controller) == null ? void 0 : _a.level) != null ? _b : 0]) != null ? _c : 0;
+  if (max === 0) return 0;
   const built = room.find(FIND_MY_STRUCTURES, {
     filter: (structure) => structure.structureType === STRUCTURE_EXTENSION
   }).length;
   const sites = room.find(FIND_MY_CONSTRUCTION_SITES, {
     filter: (site) => site.structureType === STRUCTURE_EXTENSION
   }).length;
-  if (built + sites >= max) return;
-  const offsets = [
-    [2, 0],
-    [-2, 0],
-    [0, 2],
-    [0, -2],
-    [2, 2],
-    [2, -2],
-    [-2, 2],
-    [-2, -2],
-    [3, 1],
-    [3, -1],
-    [-3, 1],
-    [-3, -1],
-    [1, 3],
-    [-1, 3],
-    [1, -3],
-    [-1, -3]
-  ];
-  for (const [dx, dy] of offsets) {
-    if (built + sites >= max) break;
+  return built + sites;
+}
+function maxExtensions(room) {
+  var _a, _b, _c;
+  return (_c = CONTROLLER_STRUCTURES[STRUCTURE_EXTENSION][(_b = (_a = room.controller) == null ? void 0 : _a.level) != null ? _b : 0]) != null ? _c : 0;
+}
+function structureBuiltAndSiteCount(room, structureType) {
+  const built = room.find(FIND_MY_STRUCTURES, {
+    filter: (structure) => structure.structureType === structureType
+  }).length;
+  const sites = room.find(FIND_MY_CONSTRUCTION_SITES, {
+    filter: (site) => site.structureType === structureType
+  }).length;
+  return built + sites;
+}
+function structureRemainingCapacity(room, structureType) {
+  var _a, _b, _c;
+  const max = (_c = CONTROLLER_STRUCTURES[structureType][(_b = (_a = room.controller) == null ? void 0 : _a.level) != null ? _b : 0]) != null ? _c : 0;
+  if (max <= 0) return 0;
+  const used = structureBuiltAndSiteCount(room, structureType);
+  return Math.max(0, max - used);
+}
+function placeCoreExtensions(room, anchor) {
+  const max = maxExtensions(room);
+  if (max === 0) return;
+  let used = extensionBuiltAndSiteCount(room);
+  if (used >= max) return;
+  for (const [dx, dy] of CORE_EXTENSION_OFFSETS) {
+    if (used >= max) break;
+    if (CORE_RESERVED_OFFSETS.has(`${dx},${dy}`)) continue;
     placeIfFree(room, anchor.x + dx, anchor.y + dy, STRUCTURE_EXTENSION);
+    used = extensionBuiltAndSiteCount(room);
+  }
+}
+function isSourceExtensionPosition(room, structure) {
+  if (structure.structureType !== STRUCTURE_EXTENSION) return false;
+  const sources = room.find(FIND_SOURCES);
+  return sources.some((source) => structure.pos.getRangeTo(source) <= 2);
+}
+function sourceExtensionAvgFill(room) {
+  const sourceExtensions2 = room.find(FIND_MY_STRUCTURES, {
+    filter: (structure) => isSourceExtensionPosition(room, structure)
+  });
+  if (sourceExtensions2.length === 0) return 0;
+  const ratios = sourceExtensions2.map((extension) => {
+    const used = extension.store.getUsedCapacity(RESOURCE_ENERGY);
+    const total = extension.store.getCapacity(RESOURCE_ENERGY);
+    if (!total) return 0;
+    return used / total;
+  });
+  return ratios.reduce((sum, ratio) => sum + ratio, 0) / ratios.length;
+}
+function shouldPlaceSourceExtensions(room) {
+  var _a, _b;
+  const rcl = (_b = (_a = room.controller) == null ? void 0 : _a.level) != null ? _b : 0;
+  if (rcl < COLONY_SETTINGS.construction.sourceExtensionsMinRcl) return false;
+  if (COLONY_SETTINGS.construction.requireEnergyCapForSourceExtensions) {
+    if (room.energyAvailable < room.energyCapacityAvailable) return false;
+  }
+  return sourceExtensionAvgFill(room) <= COLONY_SETTINGS.construction.sourceExtensionMaxAvgFillRatioToExpand;
+}
+function extensionCandidatesNearSource(room, anchor, source) {
+  const terrain = room.getTerrain();
+  const positions = [];
+  for (let dx = -2; dx <= 2; dx += 1) {
+    for (let dy = -2; dy <= 2; dy += 1) {
+      const x = source.pos.x + dx;
+      const y = source.pos.y + dy;
+      if (x < 1 || x > 48 || y < 1 || y > 48) continue;
+      const rangeToSource = Math.max(Math.abs(dx), Math.abs(dy));
+      if (rangeToSource < 1 || rangeToSource > 2) continue;
+      if (terrain.get(x, y) === TERRAIN_MASK_WALL) continue;
+      if (room.controller && room.controller.pos.getRangeTo(x, y) <= 2) continue;
+      positions.push([x, y]);
+    }
+  }
+  positions.sort((a, b) => anchor.getRangeTo(a[0], a[1]) - anchor.getRangeTo(b[0], b[1]));
+  return positions;
+}
+function placeSourceExtensions(room, anchor) {
+  const max = maxExtensions(room);
+  if (max === 0) return;
+  if (!shouldPlaceSourceExtensions(room)) return;
+  const perSource = Math.max(0, COLONY_SETTINGS.construction.sourceExtensionsPerSource);
+  if (perSource === 0) return;
+  let used = extensionBuiltAndSiteCount(room);
+  if (used >= max) return;
+  const sources = room.find(FIND_SOURCES);
+  for (const source of sources) {
+    if (used >= max) break;
+    const candidates = extensionCandidatesNearSource(room, anchor, source);
+    for (const [x, y] of candidates) {
+      if (used >= max) break;
+      const existing = source.pos.findInRange(FIND_MY_STRUCTURES, 2, {
+        filter: (structure) => structure.structureType === STRUCTURE_EXTENSION
+      }).length;
+      const pending = source.pos.findInRange(FIND_MY_CONSTRUCTION_SITES, 2, {
+        filter: (site) => site.structureType === STRUCTURE_EXTENSION
+      }).length;
+      if (existing + pending >= perSource) break;
+      placeIfFree(room, x, y, STRUCTURE_EXTENSION);
+      used = extensionBuiltAndSiteCount(room);
+    }
   }
 }
 function placeRoadsFromAnchor(room, anchor) {
@@ -439,6 +886,121 @@ function placeTowers(room, anchor) {
   placeIfFree(room, anchor.x - 3, anchor.y, STRUCTURE_TOWER);
   placeIfFree(room, anchor.x, anchor.y + 3, STRUCTURE_TOWER);
 }
+function placeCoreLogistics(room, anchor) {
+  if (structureRemainingCapacity(room, STRUCTURE_STORAGE) > 0) {
+    placeIfFree(room, anchor.x + 1, anchor.y + 1, STRUCTURE_STORAGE);
+  }
+  if (structureRemainingCapacity(room, STRUCTURE_TERMINAL) > 0) {
+    placeIfFree(room, anchor.x + 1, anchor.y - 1, STRUCTURE_TERMINAL);
+  }
+  if (structureRemainingCapacity(room, STRUCTURE_FACTORY) > 0) {
+    placeIfFree(room, anchor.x - 1, anchor.y + 1, STRUCTURE_FACTORY);
+  }
+  if (structureRemainingCapacity(room, STRUCTURE_LINK) > 0) {
+    placeIfFree(room, anchor.x - 1, anchor.y - 1, STRUCTURE_LINK);
+  }
+}
+function placeLabCluster(room, anchor) {
+  let remaining = structureRemainingCapacity(room, STRUCTURE_LAB);
+  if (remaining <= 0) return;
+  const offsets = [
+    [4, -1],
+    [4, 0],
+    [4, 1],
+    [5, -1],
+    [5, 0],
+    [5, 1],
+    [6, -1],
+    [6, 0],
+    [6, 1],
+    [5, 2]
+  ];
+  for (const [dx, dy] of offsets) {
+    if (remaining <= 0) break;
+    const before = structureBuiltAndSiteCount(room, STRUCTURE_LAB);
+    placeIfFree(room, anchor.x + dx, anchor.y + dy, STRUCTURE_LAB);
+    const after = structureBuiltAndSiteCount(room, STRUCTURE_LAB);
+    if (after > before) {
+      remaining -= 1;
+    }
+  }
+}
+function placeSourceAndControllerLinks(room, anchor) {
+  let remaining = structureRemainingCapacity(room, STRUCTURE_LINK);
+  if (remaining <= 0) return;
+  if (room.controller) {
+    const existingNearController = room.controller.pos.findInRange(FIND_MY_STRUCTURES, 2, {
+      filter: (structure) => structure.structureType === STRUCTURE_LINK
+    }).length;
+    const sitesNearController = room.controller.pos.findInRange(FIND_MY_CONSTRUCTION_SITES, 2, {
+      filter: (site) => site.structureType === STRUCTURE_LINK
+    }).length;
+    if (existingNearController + sitesNearController === 0) {
+      const path = anchor.findPathTo(room.controller.pos, { ignoreCreeps: true });
+      const finalStep = path[path.length - 1];
+      if (finalStep) {
+        const before = structureBuiltAndSiteCount(room, STRUCTURE_LINK);
+        placeIfFree(room, finalStep.x, finalStep.y, STRUCTURE_LINK);
+        const after = structureBuiltAndSiteCount(room, STRUCTURE_LINK);
+        if (after > before) {
+          remaining -= 1;
+        }
+      }
+    }
+  }
+  if (remaining <= 0) return;
+  const sources = room.find(FIND_SOURCES);
+  for (const source of sources) {
+    if (remaining <= 0) break;
+    const existing = source.pos.findInRange(FIND_MY_STRUCTURES, 2, {
+      filter: (structure) => structure.structureType === STRUCTURE_LINK
+    }).length;
+    const sites = source.pos.findInRange(FIND_MY_CONSTRUCTION_SITES, 2, {
+      filter: (site) => site.structureType === STRUCTURE_LINK
+    }).length;
+    if (existing + sites > 0) continue;
+    const path = anchor.findPathTo(source.pos, { ignoreCreeps: true });
+    const finalStep = path[path.length - 1];
+    if (!finalStep) continue;
+    const before = structureBuiltAndSiteCount(room, STRUCTURE_LINK);
+    placeIfFree(room, finalStep.x, finalStep.y, STRUCTURE_LINK);
+    const after = structureBuiltAndSiteCount(room, STRUCTURE_LINK);
+    if (after > before) {
+      remaining -= 1;
+    }
+  }
+}
+function placeMineralInfrastructure(room, anchor) {
+  var _a, _b, _c, _d;
+  if (!COLONY_SETTINGS.minerals.enabled) return;
+  if (((_b = (_a = room.controller) == null ? void 0 : _a.level) != null ? _b : 0) < COLONY_SETTINGS.minerals.minRcl) return;
+  const mineral = roomMineral(room);
+  if (!mineral) return;
+  const extractorExists = mineral.pos.lookFor(LOOK_STRUCTURES).some((structure) => structure.structureType === STRUCTURE_EXTRACTOR);
+  const extractorSiteExists = mineral.pos.lookFor(LOOK_CONSTRUCTION_SITES).some((site) => site.structureType === STRUCTURE_EXTRACTOR);
+  if (!extractorExists && !extractorSiteExists) {
+    room.createConstructionSite(mineral.pos, STRUCTURE_EXTRACTOR);
+  }
+  const hasContainer = mineral.pos.findInRange(FIND_STRUCTURES, 1, {
+    filter: (structure) => structure.structureType === STRUCTURE_CONTAINER
+  }).length;
+  const hasContainerSite = mineral.pos.findInRange(FIND_CONSTRUCTION_SITES, 1, {
+    filter: (site) => site.structureType === STRUCTURE_CONTAINER
+  }).length;
+  if (hasContainer + hasContainerSite === 0) {
+    const path = anchor.findPathTo(mineral.pos, { ignoreCreeps: true });
+    const finalStep = path[path.length - 1];
+    if (finalStep) {
+      placeIfFree(room, finalStep.x, finalStep.y, STRUCTURE_CONTAINER);
+    }
+  }
+  if ((_d = (_c = Memory.strategy) == null ? void 0 : _c[room.name]) == null ? void 0 : _d.capabilities.allowRoads) {
+    const path = anchor.findPathTo(mineral.pos, { ignoreCreeps: true });
+    for (const step of path) {
+      placeIfFree(room, step.x, step.y, STRUCTURE_ROAD);
+    }
+  }
+}
 function placeDefensiveRing(room, anchor) {
   for (let dx = -4; dx <= 4; dx += 1) {
     for (let dy = -4; dy <= 4; dy += 1) {
@@ -453,15 +1015,28 @@ function runConstructionManager() {
   if (Game.time % COLONY_SETTINGS.construction.runInterval !== 0) return;
   for (const room of Object.values(Game.rooms)) {
     if (!((_a = room.controller) == null ? void 0 : _a.my)) continue;
-    const mySpawn = room.find(FIND_MY_SPAWNS)[0];
-    if (!mySpawn) continue;
     const strategy = (_b = Memory.strategy) == null ? void 0 : _b[room.name];
     if (!strategy) continue;
+    const anchor = getRoomAnchor(room);
+    if (!anchor) continue;
     const siteCount = room.find(FIND_CONSTRUCTION_SITES).length;
     if (siteCount > COLONY_SETTINGS.construction.maxRoomConstructionSites) continue;
-    const anchor = mySpawn.pos;
-    placeExtensions(room, anchor);
+    if (COLONY_SETTINGS.construction.autoPlaceSpawnInClaimedRooms) {
+      const hasSpawn = room.find(FIND_MY_SPAWNS).length > 0;
+      const hasSpawnSite = room.find(FIND_MY_CONSTRUCTION_SITES, {
+        filter: (site) => site.structureType === STRUCTURE_SPAWN
+      }).length;
+      if (!hasSpawn && hasSpawnSite === 0) {
+        room.createConstructionSite(anchor.x, anchor.y, STRUCTURE_SPAWN);
+      }
+    }
+    placeCoreExtensions(room, anchor);
+    placeSourceExtensions(room, anchor);
     placeSourceContainers(room, anchor);
+    placeCoreLogistics(room, anchor);
+    placeLabCluster(room, anchor);
+    placeSourceAndControllerLinks(room, anchor);
+    placeMineralInfrastructure(room, anchor);
     if (strategy.capabilities.allowRoads) {
       placeRoadsFromAnchor(room, anchor);
     }
@@ -507,11 +1082,83 @@ function runDefenseManager() {
   }
 }
 
+// src/managers/linkManager.ts
+function myLinks(room) {
+  return room.find(FIND_MY_STRUCTURES, {
+    filter: (structure) => structure.structureType === STRUCTURE_LINK
+  });
+}
+function controllerLinks(room, links) {
+  const controller = room.controller;
+  if (!controller) return [];
+  return links.filter((link) => link.pos.getRangeTo(controller) <= 2);
+}
+function sourceLinks(room, links) {
+  const sources = room.find(FIND_SOURCES);
+  return links.filter((link) => sources.some((source) => link.pos.getRangeTo(source) <= 2));
+}
+function coreLinks(room, links, controller, source) {
+  const excluded = /* @__PURE__ */ new Set([...controller.map((link) => link.id), ...source.map((link) => link.id)]);
+  const roomAnchor = getRoomAnchor(room);
+  const remaining = links.filter((link) => !excluded.has(link.id));
+  if (!roomAnchor) return remaining;
+  return remaining.sort((a, b) => a.pos.getRangeTo(roomAnchor) - b.pos.getRangeTo(roomAnchor));
+}
+function canSend(link) {
+  if (link.cooldown > 0) return false;
+  return link.store.getUsedCapacity(RESOURCE_ENERGY) >= COLONY_SETTINGS.links.senderMinEnergy;
+}
+function pickReceiver(receivers) {
+  const viable = receivers.filter(
+    (link) => link.store.getFreeCapacity(RESOURCE_ENERGY) >= COLONY_SETTINGS.links.receiverMinFreeCapacity
+  );
+  if (viable.length === 0) return null;
+  viable.sort(
+    (a, b) => b.store.getFreeCapacity(RESOURCE_ENERGY) - a.store.getFreeCapacity(RESOURCE_ENERGY)
+  );
+  return viable[0];
+}
+function runRoomLinks(room) {
+  var _a, _b, _c;
+  const rcl = (_b = (_a = room.controller) == null ? void 0 : _a.level) != null ? _b : 0;
+  if (rcl < COLONY_SETTINGS.links.minRcl) return;
+  const links = myLinks(room);
+  if (links.length < 2) return;
+  const controller = controllerLinks(room, links);
+  const source = sourceLinks(room, links);
+  const core = coreLinks(room, links, controller, source);
+  const controllerNeedsEnergy = controller.filter(
+    (link) => link.store.getUsedCapacity(RESOURCE_ENERGY) < COLONY_SETTINGS.links.controllerLinkTargetLevel
+  );
+  for (const sender of source) {
+    if (!canSend(sender)) continue;
+    const preferred = (_c = pickReceiver(controllerNeedsEnergy)) != null ? _c : pickReceiver(core);
+    if (!preferred) continue;
+    sender.transferEnergy(preferred);
+  }
+  for (const sender of core) {
+    if (!canSend(sender)) continue;
+    const receiver = pickReceiver(controllerNeedsEnergy);
+    if (!receiver) continue;
+    sender.transferEnergy(receiver);
+  }
+}
+function runLinkManager() {
+  var _a;
+  if (!COLONY_SETTINGS.links.enabled) return;
+  for (const room of Object.values(Game.rooms)) {
+    if (!((_a = room.controller) == null ? void 0 : _a.my)) continue;
+    runRoomLinks(room);
+  }
+}
+
 // src/config/bodyPlans.ts
 var ROLE_BODIES = {
   harvester: { min: [WORK, CARRY, MOVE], segment: [WORK, CARRY, MOVE], maxSegments: 6 },
   hauler: { min: [CARRY, CARRY, MOVE], segment: [CARRY, CARRY, MOVE], maxSegments: 8 },
-  miner: { min: [WORK, WORK, MOVE], segment: [WORK, WORK, MOVE], maxSegments: 5 },
+  miner: { min: [WORK, WORK, CARRY, MOVE], segment: [WORK, CARRY, MOVE], maxSegments: 5 },
+  mineralMiner: { min: [WORK, WORK, CARRY, MOVE], segment: [WORK, WORK, MOVE], maxSegments: 4 },
+  mineralHauler: { min: [CARRY, CARRY, MOVE], segment: [CARRY, CARRY, MOVE], maxSegments: 8 },
   upgrader: { min: [WORK, CARRY, MOVE], segment: [WORK, CARRY, MOVE], maxSegments: 8 },
   builder: { min: [WORK, CARRY, MOVE], segment: [WORK, CARRY, MOVE], maxSegments: 6 },
   repairer: { min: [WORK, CARRY, MOVE], segment: [WORK, CARRY, MOVE], maxSegments: 5 },
@@ -519,6 +1166,7 @@ var ROLE_BODIES = {
   scout: { min: [MOVE], segment: [MOVE], maxSegments: 1 },
   reserver: { min: [CLAIM, MOVE], segment: [CLAIM, MOVE], maxSegments: 2 },
   claimer: { min: [CLAIM, MOVE], segment: [CLAIM, MOVE], maxSegments: 1 },
+  bootstrapper: { min: [WORK, CARRY, MOVE], segment: [WORK, CARRY, MOVE], maxSegments: 6 },
   soldier: { min: [TOUGH, MOVE, ATTACK, MOVE], segment: [TOUGH, MOVE, ATTACK, MOVE], maxSegments: 6 }
 };
 
@@ -576,12 +1224,32 @@ function nextRoleToSpawn(spawn) {
   }
   return null;
 }
+function pickBootstrapTargetRoom(homeRoom, targets) {
+  if (targets.length === 0) return void 0;
+  let bestTarget;
+  let bestCount = Number.MAX_SAFE_INTEGER;
+  for (const target of targets) {
+    const count = Object.values(Game.creeps).filter(
+      (creep) => creep.memory.homeRoom === homeRoom && creep.memory.role === "bootstrapper" && creep.memory.targetRoom === target
+    ).length;
+    if (count < bestCount) {
+      bestCount = count;
+      bestTarget = target;
+    }
+  }
+  return bestTarget;
+}
 function runSpawnManager() {
+  var _a;
   const spawns = Object.values(Game.spawns);
   for (const spawn of spawns) {
     if (spawn.spawning) continue;
     const role = nextRoleToSpawn(spawn);
     if (!role) continue;
+    const strategy = (_a = Memory.strategy) == null ? void 0 : _a[spawn.room.name];
+    if (!strategy) continue;
+    const bootstrapTargetRoom = role === "bootstrapper" ? pickBootstrapTargetRoom(spawn.room.name, strategy.bootstrapTargetRooms) : void 0;
+    if (role === "bootstrapper" && !bootstrapTargetRoom) continue;
     const energyBudget = spawn.room.energyAvailable;
     const body = buildBody(role, energyBudget);
     if (!body) continue;
@@ -590,24 +1258,11 @@ function runSpawnManager() {
       memory: {
         role,
         homeRoom: spawn.room.name,
-        working: false
+        working: false,
+        targetRoom: bootstrapTargetRoom
       }
     });
   }
-}
-
-// src/tasks/movement.ts
-function moveToTarget(creep, target, range = 1) {
-  creep.moveTo(target, {
-    reusePath: 10,
-    maxRooms: COLONY_SETTINGS.movement.maxRoomsPerPath,
-    range: range != null ? range : COLONY_SETTINGS.movement.defaultRange,
-    visualizePathStyle: { stroke: "#8ecae6" }
-  });
-}
-function moveToRoomCenter(creep, roomName) {
-  const target = new RoomPosition(25, 25, roomName);
-  moveToTarget(creep, target, 20);
 }
 
 // src/tasks/work.ts
@@ -793,6 +1448,37 @@ function runBuilder(creep) {
   upgradeController(creep);
 }
 
+// src/roles/bootstrapper.ts
+function buildSpawnFirst(creep) {
+  const spawnSite = creep.pos.findClosestByPath(FIND_MY_CONSTRUCTION_SITES, {
+    filter: (site) => site.structureType === STRUCTURE_SPAWN
+  });
+  if (!spawnSite) return false;
+  const result = creep.build(spawnSite);
+  if (result === ERR_NOT_IN_RANGE) {
+    creep.moveTo(spawnSite, { reusePath: 10, visualizePathStyle: { stroke: "#e76f51" } });
+    return true;
+  }
+  return result === OK;
+}
+function runBootstrapper(creep) {
+  const targetRoom = creep.memory.targetRoom;
+  if (!targetRoom) return;
+  if (creep.room.name !== targetRoom) {
+    moveToRoomCenter(creep, targetRoom);
+    return;
+  }
+  updateWorkingState(creep);
+  if (!creep.memory.working) {
+    acquireEnergy(creep);
+    return;
+  }
+  if (buildSpawnFirst(creep)) return;
+  if (buildNearestSite(creep)) return;
+  if (fillPriorityEnergyTargets(creep)) return;
+  upgradeController(creep);
+}
+
 // src/tasks/combat.ts
 function reserveRoomController(creep, roomName) {
   if (creep.room.name !== roomName) {
@@ -851,11 +1537,15 @@ function attackInRoom(creep, roomName) {
 
 // src/roles/claimer.ts
 function runClaimer(creep) {
-  var _a, _b, _c;
+  var _a, _b, _c, _d;
   const targets = (_c = (_b = (_a = Memory.strategy) == null ? void 0 : _a[creep.memory.homeRoom]) == null ? void 0 : _b.claimTargetRooms) != null ? _c : [];
   if (targets.length === 0) return;
   const targetRoom = targets[0];
-  claimRoomController(creep, targetRoom);
+  if (claimRoomController(creep, targetRoom)) {
+    if (creep.room.name === targetRoom && ((_d = creep.room.controller) == null ? void 0 : _d.my)) {
+      markManualTargetClaimed(creep.memory.homeRoom, targetRoom);
+    }
+  }
 }
 
 // src/roles/harvester.ts
@@ -870,10 +1560,32 @@ function runHarvester(creep) {
 }
 
 // src/roles/hauler.ts
+function isNearAnySource(room, pos, range = 2) {
+  const sources = room.find(FIND_SOURCES);
+  return sources.some((source) => pos.getRangeTo(source) <= range);
+}
+function withdrawFromSourceExtensions(creep) {
+  const target = creep.pos.findClosestByPath(FIND_MY_STRUCTURES, {
+    filter: (structure) => {
+      if (structure.structureType !== STRUCTURE_EXTENSION) return false;
+      if (!isNearAnySource(creep.room, structure.pos, 2)) return false;
+      const extension = structure;
+      return extension.store.getUsedCapacity(RESOURCE_ENERGY) > 0;
+    }
+  });
+  if (!target) return false;
+  const result = creep.withdraw(target, RESOURCE_ENERGY);
+  if (result === ERR_NOT_IN_RANGE) {
+    creep.moveTo(target, { reusePath: 15, visualizePathStyle: { stroke: "#219ebc" } });
+    return true;
+  }
+  return result === OK;
+}
 function withdrawFromSourceContainers(creep) {
   const target = creep.pos.findClosestByPath(FIND_STRUCTURES, {
     filter: (structure) => {
       if (structure.structureType !== STRUCTURE_CONTAINER) return false;
+      if (!isNearAnySource(creep.room, structure.pos, 1)) return false;
       const container = structure;
       return container.store.getUsedCapacity(RESOURCE_ENERGY) >= COLONY_SETTINGS.energy.haulerContainerWithdrawMinEnergy;
     }
@@ -886,18 +1598,49 @@ function withdrawFromSourceContainers(creep) {
   }
   return result === OK;
 }
+function fillCoreEnergyTargets(creep) {
+  var _a;
+  const homeRoom = Game.rooms[creep.memory.homeRoom];
+  const anchor = (_a = homeRoom == null ? void 0 : homeRoom.find(FIND_MY_SPAWNS)[0]) == null ? void 0 : _a.pos;
+  const target = creep.pos.findClosestByPath(FIND_STRUCTURES, {
+    filter: (structure) => {
+      if (structure.structureType === STRUCTURE_SPAWN || structure.structureType === STRUCTURE_TOWER) {
+        return structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
+      }
+      if (structure.structureType !== STRUCTURE_EXTENSION) return false;
+      if (anchor && structure.pos.getRangeTo(anchor) > COLONY_SETTINGS.logistics.coreDeliveryRangeFromSpawn) return false;
+      return structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0;
+    }
+  });
+  if (!target) return false;
+  const result = creep.transfer(target, RESOURCE_ENERGY);
+  if (result === ERR_NOT_IN_RANGE) {
+    creep.moveTo(target, { reusePath: 10, visualizePathStyle: { stroke: "#219ebc" } });
+    return true;
+  }
+  return result === OK;
+}
 function runHauler(creep) {
   updateWorkingState(creep);
   if (!creep.memory.working) {
+    if (withdrawFromSourceExtensions(creep)) return;
     if (withdrawFromSourceContainers(creep)) return;
     if (withdrawStoredEnergy(creep)) return;
     pickupDroppedEnergy(creep);
     return;
   }
+  if (fillCoreEnergyTargets(creep)) return;
   fillPriorityEnergyTargets(creep);
 }
 
 // src/roles/miner.ts
+function sourceExtensions(creep) {
+  const source = creep.memory.sourceId ? Game.getObjectById(creep.memory.sourceId) : null;
+  if (!source) return [];
+  return source.pos.findInRange(FIND_MY_STRUCTURES, 2, {
+    filter: (structure) => structure.structureType === STRUCTURE_EXTENSION && structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0
+  });
+}
 function sourceContainer(creep) {
   var _a;
   const source = creep.memory.sourceId ? Game.getObjectById(creep.memory.sourceId) : null;
@@ -908,12 +1651,67 @@ function sourceContainer(creep) {
   return (_a = containers[0]) != null ? _a : null;
 }
 function runMiner(creep) {
+  if (creep.store.getUsedCapacity(RESOURCE_ENERGY) > 0) {
+    const extension = creep.pos.findClosestByRange(sourceExtensions(creep));
+    if (extension) {
+      const result = creep.transfer(extension, RESOURCE_ENERGY);
+      if (result === ERR_NOT_IN_RANGE) {
+        creep.moveTo(extension, { reusePath: 10, visualizePathStyle: { stroke: "#ffb703" } });
+      }
+      return;
+    }
+  }
   const container = sourceContainer(creep);
+  if (container && creep.store.getUsedCapacity(RESOURCE_ENERGY) > 0) {
+    const transfer = creep.transfer(container, RESOURCE_ENERGY);
+    if (transfer === ERR_NOT_IN_RANGE) {
+      creep.moveTo(container, { reusePath: 10, visualizePathStyle: { stroke: "#ffb703" } });
+    }
+    return;
+  }
   if (container && creep.pos.getRangeTo(container) > 0) {
     creep.moveTo(container, { reusePath: 20, visualizePathStyle: { stroke: "#ffb703" } });
     return;
   }
   harvestEnergy(creep);
+}
+
+// src/roles/mineralHauler.ts
+function runMineralHauler(creep) {
+  updateWorkingState(creep);
+  if (!creep.memory.working) {
+    if (withdrawMineralsFromContainer(creep)) return;
+    pickupDroppedMinerals(creep);
+    return;
+  }
+  transferCarriedMinerals(creep);
+}
+
+// src/roles/mineralMiner.ts
+function runMineralMiner(creep) {
+  const mineral = roomMineral(creep.room);
+  if (!mineral || mineral.mineralAmount <= 0) return;
+  const container = roomMineralContainer(creep.room);
+  if (container && creep.pos.getRangeTo(container) > 0) {
+    creep.moveTo(container, { reusePath: 20, visualizePathStyle: { stroke: "#c77dff" } });
+    return;
+  }
+  if (creep.store.getFreeCapacity() === 0) {
+    if (container) {
+      const resource = Object.keys(creep.store).find(
+        (entry) => entry !== RESOURCE_ENERGY && creep.store.getUsedCapacity(entry) > 0
+      );
+      if (!resource) return;
+      const result = creep.transfer(container, resource);
+      if (result === ERR_NOT_IN_RANGE) {
+        creep.moveTo(container, { reusePath: 10, visualizePathStyle: { stroke: "#c77dff" } });
+      }
+      return;
+    }
+    transferCarriedMinerals(creep);
+    return;
+  }
+  harvestMineral(creep);
 }
 
 // src/roles/repairer.ts
@@ -993,11 +1791,20 @@ function runRole(creep) {
     case "miner":
       runMiner(creep);
       return;
+    case "mineralMiner":
+      runMineralMiner(creep);
+      return;
+    case "mineralHauler":
+      runMineralHauler(creep);
+      return;
     case "upgrader":
       runUpgrader(creep);
       return;
     case "builder":
       runBuilder(creep);
+      return;
+    case "bootstrapper":
+      runBootstrapper(creep);
       return;
     case "repairer":
       runRepairer(creep);
@@ -1026,6 +1833,7 @@ var loop = () => {
   runColonyManager();
   runSpawnManager();
   runConstructionManager();
+  runLinkManager();
   runDefenseManager();
   for (const creep of Object.values(Game.creeps)) {
     runRole(creep);

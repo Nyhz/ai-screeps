@@ -2,6 +2,8 @@ export const ROLE_ORDER = [
   "harvester",
   "hauler",
   "miner",
+  "mineralMiner",
+  "mineralHauler",
   "upgrader",
   "builder",
   "repairer",
@@ -9,6 +11,7 @@ export const ROLE_ORDER = [
   "scout",
   "reserver",
   "claimer",
+  "bootstrapper",
   "soldier"
 ] as const;
 

@@ -4,7 +4,7 @@ Single-file configuration now lives in:
 
 `src/config/settings.ts`
 
-This file is your colony "control panel" for:
+This file is your colony control panel for:
 
 - Role counts per room and per stage
 - Progression thresholds (RCL, energy, storage)
@@ -13,7 +13,8 @@ This file is your colony "control panel" for:
 - Remote room allow/block filters
 - Construction cadence and caps
 - Wall/repair targets
-- Movement pathing limits
+- Energy and mineral handling thresholds
+- Movement and logistics behavior
 
 ---
 
@@ -38,16 +39,21 @@ npm run push
 
 ```text
 COLONY_SETTINGS
-├─ pvp            -> Global combat policy + protected rooms
-├─ stage          -> Unlock thresholds for towers/walls/remote/expansion/offense
-├─ planner        -> Base spawn logic knobs
-├─ construction   -> How often and how much to place
-├─ defense        -> Tower repair limits
-├─ walls          -> Wall/rampart fortification targets by RCL
-├─ energy         -> Pickup/withdraw thresholds
-├─ movement       -> Pathfinding room span + target range defaults
-├─ roleTargets    -> Global and per-stage hard overrides
-└─ rooms          -> Per-room overrides (roles, PvP, remote filters)
++- pvp            -> Global combat policy + protected rooms
++- stage          -> Unlock thresholds for towers/walls/remote/expansion/offense
++- planner        -> Base spawn logic knobs
++- construction   -> How often and how much to place
++- defense        -> Tower repair limits
++- walls          -> Wall/rampart fortification targets by RCL
++- energy         -> Pickup/withdraw thresholds
++- minerals       -> RCL6+ mineral extraction + hauling + storage
++- movement       -> Pathfinding room span + target range defaults
++- logistics      -> Core delivery behavior near spawn
++- links          -> Link network routing and transfer thresholds
++- layout         -> Adaptive room anchor selection for long-term planning
++- expansion      -> Manual room conquest control (default) or auto-neighbor mode
++- roleTargets    -> Global and per-stage hard overrides
++- rooms          -> Per-room overrides (roles, PvP, remote filters)
 ```
 
 ---
@@ -73,7 +79,7 @@ If two settings define the same role, the later item in the list wins.
 | Variable | Type | Default | Possible values | Effect |
 |---|---|---:|---|---|
 | `pvp.enabled` | `boolean` | `false` | `true`, `false` | Master switch for offensive behavior. If `false`, offensive targeting is disabled globally. |
-| `pvp.noAttackRooms` | `string[]` | `[]` | Any Screeps room names, e.g. `["W8N3"]` | Global protected list. Your creeps will not attack these rooms even if PvP is enabled. |
+| `pvp.noAttackRooms` | `string[]` | `[]` | Any Screeps room names, e.g. `['W8N3']` | Global protected list. Your creeps will not attack these rooms even if PvP is enabled. |
 
 ### `stage`
 
@@ -93,6 +99,7 @@ If two settings define the same role, the later item in the list wins.
 |---|---|---:|---|---|
 | `planner.minHarvesters` | `number` | `2` | `0+` | Lower bound for harvester count (still compared with source count). |
 | `planner.baseHaulers` | `number` | `1` | `0+` | Baseline hauler count before stage-specific adjustments. |
+| `planner.haulersPerSource` | `number` | `1` | `0+` | Hauler scaling multiplier per source after bootstrap. Increase if source depots are backing up. |
 | `planner.baseUpgraders` | `number` | `1` | `0+` | Baseline upgrader count in bootstrap logic. |
 | `planner.buildersWhenSitesExist` | `number` | `2` | `0+` | Builder count when construction sites exist. |
 | `planner.buildersWhenNoSites` | `number` | `1` | `0+` | Builder count when no construction sites exist. |
@@ -115,6 +122,11 @@ If two settings define the same role, the later item in the list wins.
 |---|---|---:|---|---|
 | `construction.runInterval` | `number` | `37` | `1+` | Construction manager runs every N ticks. Lower = faster placement, higher CPU usage. |
 | `construction.maxRoomConstructionSites` | `number` | `10` | `1+` | If room has more than this many sites, new sites are not placed. |
+| `construction.autoPlaceSpawnInClaimedRooms` | `boolean` | `true` | `true`, `false` | If enabled, newly claimed owned rooms automatically place an initial spawn construction site at the planned anchor. |
+| `construction.sourceExtensionsPerSource` | `number` | `2` | `0+` | Target count of source-side extension depots per source. |
+| `construction.sourceExtensionsMinRcl` | `number` | `3` | `1-8` | Minimum RCL required before source-side extension depots are considered. |
+| `construction.requireEnergyCapForSourceExtensions` | `boolean` | `true` | `true`, `false` | If `true`, source-side extension expansion happens only when room energy is capped. |
+| `construction.sourceExtensionMaxAvgFillRatioToExpand` | `number` | `0.4` | `0.0-1.0` | Add more source-side extensions only if existing ones are draining fast enough (avg fill ratio below threshold). |
 
 ### `defense`
 
@@ -151,12 +163,108 @@ Default map:
 | `energy.pickupDroppedEnergyMinAmount` | `number` | `50` | `0+` | Minimum dropped energy pile size that creeps will pick up. |
 | `energy.haulerContainerWithdrawMinEnergy` | `number` | `100` | `0+` | Minimum container energy before haulers withdraw from source containers. |
 
+### `minerals`
+
+This pipeline supports Oxygen and any other mineral type present in your room.
+
+Activation logic:
+
+- `minerals.enabled = true`
+- Room RCL >= `minerals.minRcl` (default `6`)
+- Mineral has `mineralAmount > 0`
+- If `minerals.requireStorage = true`, room must have `storage`
+
+When active:
+
+- Construction manager places:
+  - `STRUCTURE_EXTRACTOR` on mineral
+  - A nearby `STRUCTURE_CONTAINER` if missing
+  - Roads from spawn anchor to mineral when roads are enabled
+- Spawn planner requests:
+  - `mineralMiner`
+  - `mineralHauler`
+- Hauling destination priority:
+  1. `storage`
+  2. `terminal` if `allowTerminalFallback`
+  3. nearest container if `allowContainerFallback`
+
+| Variable | Type | Default | Possible values | Effect |
+|---|---|---:|---|---|
+| `minerals.enabled` | `boolean` | `true` | `true`, `false` | Master switch for mineral extraction pipeline. |
+| `minerals.minRcl` | `number` | `6` | `1-8` | Minimum room RCL before mineral extraction is allowed. |
+| `minerals.requireStorage` | `boolean` | `true` | `true`, `false` | If `true`, mineral roles only activate after storage exists. |
+| `minerals.minerCount` | `number` | `1` | `0+` | Desired number of `mineralMiner` creeps when pipeline is active. |
+| `minerals.haulerCount` | `number` | `1` | `0+` | Desired number of `mineralHauler` creeps when pipeline is active. |
+| `minerals.containerWithdrawMin` | `number` | `50` | `0+` | Minimum non-energy amount in a container before a mineral hauler withdraws. |
+| `minerals.allowTerminalFallback` | `boolean` | `true` | `true`, `false` | If `true`, haulers can deliver to terminal when storage is unavailable. |
+| `minerals.allowContainerFallback` | `boolean` | `true` | `true`, `false` | If `true`, haulers can fallback to nearest container when no storage or terminal exists. |
+
 ### `movement`
 
 | Variable | Type | Default | Possible values | Effect |
 |---|---|---:|---|---|
 | `movement.maxRoomsPerPath` | `number` | `16` | `1+` | Max rooms used by `moveTo` pathfinding. Lower values may block remote operations. |
 | `movement.defaultRange` | `number` | `1` | `1+` | Default interaction range used by movement helper when no custom range is passed. |
+
+### `logistics`
+
+| Variable | Type | Default | Possible values | Effect |
+|---|---|---:|---|---|
+| `logistics.coreDeliveryRangeFromSpawn` | `number` | `8` | `1+` | Haulers prioritize filling extensions within this range from the spawn first, keeping spawn-core energy stable. |
+
+### `links`
+
+Link roles are inferred automatically by position:
+
+- source link: within range 2 of a source
+- controller link: within range 2 of controller
+- core link: remaining links (usually near anchor/storage)
+
+Routing priority:
+
+1. Source links send to controller link if it needs energy.
+2. Otherwise source links send to core links.
+3. Core links send to controller link when needed.
+
+| Variable | Type | Default | Possible values | Effect |
+|---|---|---:|---|---|
+| `links.enabled` | `boolean` | `true` | `true`, `false` | Master switch for automated link transfers. |
+| `links.minRcl` | `number` | `5` | `1-8` | Minimum RCL before link manager attempts routing. |
+| `links.senderMinEnergy` | `number` | `400` | `0+` | Minimum energy a sender link must hold before transfer attempts. |
+| `links.receiverMinFreeCapacity` | `number` | `200` | `0+` | Minimum free capacity required for receiver links. |
+| `links.controllerLinkTargetLevel` | `number` | `600` | `0-800` | Controller link is treated as needing refill below this energy level. |
+
+### `layout`
+
+Adaptive planning picks and caches a room anchor in memory (`Memory.roomPlans`) to keep long-term layout consistent.
+If a spawn already exists, spawn position is used as anchor. Otherwise, the planner scores terrain and distances to sources/controller.
+
+| Variable | Type | Default | Possible values | Effect |
+|---|---|---:|---|---|
+| `layout.scanMin` | `number` | `6` | `1-48` | Minimum x/y scan coordinate when searching candidate anchors. |
+| `layout.scanMax` | `number` | `43` | `1-48` | Maximum x/y scan coordinate when searching candidate anchors. |
+| `layout.minEdgeDistance` | `number` | `4` | `0+` | Penalizes anchors too close to exits/room edges. |
+| `layout.desiredControllerRange` | `number` | `8` | `1+` | Target range from anchor to controller during scoring. |
+| `layout.desiredSourceRange` | `number` | `8` | `1+` | Target range from anchor to each source during scoring. |
+
+### `expansion`
+
+By default, expansion is manual-only. The bot will not claim new rooms unless you add them to the configured list for a home room.
+
+| Variable | Type | Default | Possible values | Effect |
+|---|---|---:|---|---|
+| `expansion.autoClaimNeighbors` | `boolean` | `false` | `true`, `false` | If `false`, disables automatic neighbor claiming and uses only manual target lists. |
+| `expansion.maxConcurrentBootstrapRoomsPerHome` | `number` | `1` | `0+` | Max number of already-claimed rooms each home room bootstraps in parallel before they have their own spawn. |
+| `expansion.bootstrapperCountPerTargetRoom` | `number` | `2` | `0+` | Number of dedicated `bootstrapper` creeps spawned per bootstrapped target room. |
+| `expansion.manualClaimTargetsByRoom` | `Record<string, string[]>` | `{}` | Map of `homeRoom -> [targetRoom,...]` | Manual conquest queue. Add a target room name to start claiming it. |
+
+Manual conquest behavior:
+
+1. Bot picks only one pending target at a time per home room (first unresolved in your list).
+2. It keeps trying that same room until owned.
+3. Once owned, it is automatically considered complete and no longer targeted.
+4. After claim, parent room sends `bootstrapper` creeps to build startup structures until the new room has its own spawn.
+5. No repeated re-conquer loop happens while the room stays yours.
 
 ### `roleTargets`
 
@@ -170,7 +278,7 @@ Default map:
 
 Valid role keys:
 
-`harvester`, `hauler`, `miner`, `upgrader`, `builder`, `repairer`, `waller`, `scout`, `reserver`, `claimer`, `soldier`
+`harvester`, `hauler`, `miner`, `mineralMiner`, `mineralHauler`, `upgrader`, `builder`, `repairer`, `waller`, `scout`, `reserver`, `claimer`, `bootstrapper`, `soldier`
 
 ### `rooms`
 
@@ -179,7 +287,7 @@ Per-room local policy and overrides.
 ```ts
 rooms: {
   W1N1: {
-    roleTargets: { upgrader: 4, builder: 2 },
+    roleTargets: { upgrader: 4, builder: 2, mineralHauler: 1 },
     roleTargetsByStage: {
       mid: { reserver: 2 }
     },
@@ -196,67 +304,65 @@ rooms: {
 | `rooms[roomName].roleTargets` | `Partial<Record<RoleName, number>>` | `{}` | Role keys with counts | Per-room hard override, higher priority than global/stage overrides. |
 | `rooms[roomName].roleTargetsByStage` | `Partial<Record<ColonyStage, Partial<Record<RoleName, number>>>>` | `{}` | Stage + role maps | Highest-priority role override for a room at a specific stage. |
 | `rooms[roomName].disablePvP` | `boolean` | `false` | `true`, `false` | Disables offense for this room only (even if global PvP is enabled). |
-| `rooms[roomName].noAttackRooms` | `string[]` | `[]` | Room names | Extra per-room protected rooms; merged with global `pvp.noAttackRooms`. |
+| `rooms[roomName].noAttackRooms` | `string[]` | `[]` | Room names | Extra per-room protected rooms merged with global `pvp.noAttackRooms`. |
 | `rooms[roomName].remoteRoomAllowlist` | `string[] \| undefined` | `undefined` | Room names | If set and non-empty, only these rooms are valid for this room's remote reserve/claim targeting. |
 | `rooms[roomName].remoteRoomBlocklist` | `string[]` | `[]` | Room names | Rooms excluded from this room's remote reserve/claim targeting. |
 
 ---
 
-## Recommended Presets
+## RCL3+ Source Depot Energy Flow
 
-### Safe Economy (no PvP)
+At higher extension counts, the bot can create source-side extension depots and route energy toward spawn-core.
 
-```ts
-pvp: { enabled: false, noAttackRooms: [] },
-stage: {
-  towersMinRcl: 3,
-  wallsMinRcl: 4,
-  remoteMiningMinRcl: 3,
-  remoteMiningMinEnergyCapacity: 800,
-  expansionMinRcl: 4,
-  offenseMinRcl: 8,
-  offenseMinStorageEnergy: 500000
-}
-```
+Flow:
 
-Effect:
+1. `miner` harvests source energy.
+2. Miner deposits first into extension depots near the source.
+3. `hauler` withdraws from source-side extensions/containers.
+4. Hauler fills spawn-core extensions first, then other priority energy targets.
+5. In newly conquered rooms, first spawn site is placed at the adaptive planned anchor so future extensions/roads/defenses fit the same blueprint.
 
-- Strong focus on growth and defense
-- No accidental aggression
-- Expansion starts at RCL4 if GCL allows
-
-### Expansion First
+Recommended starting values:
 
 ```ts
 planner: {
   ...COLONY_SETTINGS.planner,
-  upgradersByStage: { bootstrap: 1, early: 1, mid: 2, late: 2 },
-  claimerCount: 2,
-  reserverCount: 2
+  haulersPerSource: 2
+},
+construction: {
+  ...COLONY_SETTINGS.construction,
+  sourceExtensionsPerSource: 2,
+  sourceExtensionsMinRcl: 3,
+  requireEnergyCapForSourceExtensions: true,
+  sourceExtensionMaxAvgFillRatioToExpand: 0.4
+},
+logistics: {
+  coreDeliveryRangeFromSpawn: 8
+}
+```
+
+---
+
+## RCL6+ Mineral Pipeline Example
+
+```ts
+minerals: {
+  enabled: true,
+  minRcl: 6,
+  requireStorage: true,
+  minerCount: 1,
+  haulerCount: 1,
+  containerWithdrawMin: 50,
+  allowTerminalFallback: true,
+  allowContainerFallback: true
 }
 ```
 
 Effect:
 
-- Fewer upgraders, more room-control units
-- Faster claim/reserve pressure
-
-### Fortress Mode
-
-```ts
-walls: {
-  targetHitsByRcl: {
-    1: 5000, 2: 50000, 3: 200000, 4: 300000,
-    5: 500000, 6: 1000000, 7: 3000000, 8: 10000000
-  }
-},
-defense: { wallRepairCap: 500000, structureRepairCap: 500000 }
-```
-
-Effect:
-
-- Higher energy spent on survivability
-- Slower tech progression if economy is not strong
+- As soon as a room reaches RCL6 and has storage, extractor/container/road infra gets planned.
+- One miner starts harvesting mineral directly from the deposit.
+- One hauler moves mineral into storage for later labs/industry usage.
 
 ---
 
@@ -264,8 +370,11 @@ Effect:
 
 - Keep `planner.hostilesPerSoldier >= 1` to avoid extreme soldier scaling.
 - Very low `construction.runInterval` can increase CPU usage significantly.
+- If `construction.sourceExtensionMaxAvgFillRatioToExpand` is too high, source depots may overbuild and stay full.
+- If `planner.haulersPerSource` is too low, source-side extensions/containers can saturate and throttle miners.
 - Very low `movement.maxRoomsPerPath` can break remote operations.
 - High wall targets at low RCL can stall controller upgrades.
+- Setting `minerals.requireStorage = false` can start extraction earlier, but stockpiling may become inefficient.
 - `remoteRoomAllowlist` takes precedence in practice: if set, only listed rooms are allowed.
 - `rooms[roomName].disablePvP = true` overrides global PvP for that room.
 

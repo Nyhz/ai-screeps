@@ -38,6 +38,7 @@ export const COLONY_SETTINGS = {
   planner: {
     minHarvesters: 2,
     baseHaulers: 1,
+    haulersPerSource: 1,
     baseUpgraders: 1,
     buildersWhenSitesExist: 2,
     buildersWhenNoSites: 1,
@@ -58,7 +59,12 @@ export const COLONY_SETTINGS = {
   },
   construction: {
     runInterval: 37,
-    maxRoomConstructionSites: 10
+    maxRoomConstructionSites: 10,
+    autoPlaceSpawnInClaimedRooms: true,
+    sourceExtensionsPerSource: 2,
+    sourceExtensionsMinRcl: 3,
+    requireEnergyCapForSourceExtensions: true,
+    sourceExtensionMaxAvgFillRatioToExpand: 0.4
   },
   defense: {
     wallRepairCap: 200000,
@@ -80,9 +86,44 @@ export const COLONY_SETTINGS = {
     pickupDroppedEnergyMinAmount: 50,
     haulerContainerWithdrawMinEnergy: 100
   },
+  minerals: {
+    enabled: true,
+    minRcl: 6,
+    requireStorage: true,
+    minerCount: 1,
+    haulerCount: 1,
+    containerWithdrawMin: 50,
+    allowTerminalFallback: true,
+    allowContainerFallback: true
+  },
   movement: {
     maxRoomsPerPath: 16,
     defaultRange: 1
+  },
+  logistics: {
+    coreDeliveryRangeFromSpawn: 8
+  },
+  links: {
+    enabled: true,
+    minRcl: 5,
+    senderMinEnergy: 400,
+    receiverMinFreeCapacity: 200,
+    controllerLinkTargetLevel: 600
+  },
+  layout: {
+    scanMin: 6,
+    scanMax: 43,
+    minEdgeDistance: 4,
+    desiredControllerRange: 8,
+    desiredSourceRange: 8
+  },
+  expansion: {
+    autoClaimNeighbors: false,
+    maxConcurrentBootstrapRoomsPerHome: 1,
+    bootstrapperCountPerTargetRoom: 2,
+    manualClaimTargetsByRoom: {
+      E18N7: []
+    } as Record<string, string[]>
   },
   roleTargets: {
     default: {} as RoleTargetOverrides,
@@ -134,6 +175,75 @@ export function isRemoteRoomAllowed(homeRoom: string, targetRoom: string): boole
     return roomSettings.remoteRoomAllowlist.includes(targetRoom);
   }
   return true;
+}
+
+function isOwnedByMe(roomName: string): boolean {
+  const room = Game.rooms[roomName];
+  return Boolean(room?.controller?.my);
+}
+
+function hasMySpawn(roomName: string): boolean {
+  const room = Game.rooms[roomName];
+  if (!room?.controller?.my) return false;
+  return room.find(FIND_MY_SPAWNS).length > 0;
+}
+
+export function getManualClaimTargets(homeRoom: string): string[] {
+  return unique(COLONY_SETTINGS.expansion.manualClaimTargetsByRoom[homeRoom] ?? []);
+}
+
+function ensureExpansionState(homeRoom: string): Record<string, "pendingClaim" | "claimedNoSpawn" | "spawnEstablished"> {
+  if (!Memory.expansionState) {
+    Memory.expansionState = {};
+  }
+
+  if (!Memory.expansionState[homeRoom]) {
+    Memory.expansionState[homeRoom] = {};
+  }
+
+  return Memory.expansionState[homeRoom];
+}
+
+function inferExpansionState(targetRoom: string): "pendingClaim" | "claimedNoSpawn" | "spawnEstablished" | null {
+  const room = Game.rooms[targetRoom];
+  if (!room?.controller) return null;
+  if (!room.controller.my) return "pendingClaim";
+  return room.find(FIND_MY_SPAWNS).length > 0 ? "spawnEstablished" : "claimedNoSpawn";
+}
+
+export function syncExpansionStateForHome(homeRoom: string): void {
+  const state = ensureExpansionState(homeRoom);
+  const targets = getManualClaimTargets(homeRoom);
+
+  for (const targetRoom of targets) {
+    if (!state[targetRoom]) {
+      state[targetRoom] = "pendingClaim";
+    }
+
+    const inferred = inferExpansionState(targetRoom);
+    if (!inferred) continue;
+    state[targetRoom] = inferred;
+  }
+}
+
+export function markManualTargetClaimed(homeRoom: string, targetRoom: string): void {
+  const state = ensureExpansionState(homeRoom);
+  state[targetRoom] = "claimedNoSpawn";
+}
+
+export function getPendingManualClaimTargets(homeRoom: string): string[] {
+  syncExpansionStateForHome(homeRoom);
+  const state = ensureExpansionState(homeRoom);
+  return getManualClaimTargets(homeRoom).filter((roomName) => state[roomName] === "pendingClaim");
+}
+
+export function getBootstrapTargetRooms(homeRoom: string): string[] {
+  syncExpansionStateForHome(homeRoom);
+  const state = ensureExpansionState(homeRoom);
+  const targets = getManualClaimTargets(homeRoom).filter((roomName) => state[roomName] === "claimedNoSpawn");
+  const limit = Math.max(0, COLONY_SETTINGS.expansion.maxConcurrentBootstrapRoomsPerHome);
+  if (limit === 0) return [];
+  return targets.slice(0, limit);
 }
 
 export function getWallTargetHits(rcl: number): number {

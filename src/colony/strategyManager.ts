@@ -1,5 +1,11 @@
 import type { ColonyStrategy } from "./types";
-import { isAttackAllowed, isRemoteRoomAllowed } from "../config/settings";
+import {
+  COLONY_SETTINGS,
+  getBootstrapTargetRooms,
+  getPendingManualClaimTargets,
+  isAttackAllowed,
+  isRemoteRoomAllowed
+} from "../config/settings";
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
@@ -18,13 +24,16 @@ export function deriveTargetRooms(room: Room, strategy: ColonyStrategy): ColonyS
   const scoutTargetRooms = visibleNeighbors;
   const reserveTargetRooms = strategy.capabilities.allowRemoteMining ? allowedRemoteNeighbors : [];
 
-  const claimTargetRooms = strategy.capabilities.allowExpansion
-    ? allowedRemoteNeighbors.filter((name) => {
-        const targetRoom = Game.rooms[name];
-        if (!targetRoom?.controller) return true;
-        return !targetRoom.controller.owner && !targetRoom.controller.reservation;
-      })
-    : [];
+  const autoClaimTargetRooms = allowedRemoteNeighbors.filter((name) => {
+    const targetRoom = Game.rooms[name];
+    if (!targetRoom?.controller) return true;
+    return !targetRoom.controller.owner && !targetRoom.controller.reservation;
+  });
+
+  const manualClaimTargetRooms = getPendingManualClaimTargets(room.name);
+  const bootstrapTargetRooms = getBootstrapTargetRooms(room.name);
+  const desiredClaimList = COLONY_SETTINGS.expansion.autoClaimNeighbors ? autoClaimTargetRooms : manualClaimTargetRooms;
+  const claimTargetRooms = strategy.capabilities.allowExpansion && desiredClaimList.length > 0 ? [desiredClaimList[0]] : [];
 
   const attackTargetRooms = strategy.capabilities.allowOffense
     ? visibleNeighbors.filter((name) => {
@@ -40,6 +49,7 @@ export function deriveTargetRooms(room: Room, strategy: ColonyStrategy): ColonyS
     scoutTargetRooms,
     reserveTargetRooms,
     claimTargetRooms,
+    bootstrapTargetRooms,
     attackTargetRooms
   };
 }

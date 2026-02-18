@@ -45,6 +45,26 @@ function nextRoleToSpawn(spawn: StructureSpawn): RoleName | null {
   return null;
 }
 
+function pickBootstrapTargetRoom(homeRoom: string, targets: string[]): string | undefined {
+  if (targets.length === 0) return undefined;
+
+  let bestTarget: string | undefined;
+  let bestCount = Number.MAX_SAFE_INTEGER;
+
+  for (const target of targets) {
+    const count = Object.values(Game.creeps).filter(
+      (creep) => creep.memory.homeRoom === homeRoom && creep.memory.role === "bootstrapper" && creep.memory.targetRoom === target
+    ).length;
+
+    if (count < bestCount) {
+      bestCount = count;
+      bestTarget = target;
+    }
+  }
+
+  return bestTarget;
+}
+
 export function runSpawnManager(): void {
   const spawns = Object.values(Game.spawns);
   for (const spawn of spawns) {
@@ -52,6 +72,12 @@ export function runSpawnManager(): void {
 
     const role = nextRoleToSpawn(spawn);
     if (!role) continue;
+    const strategy = Memory.strategy?.[spawn.room.name];
+    if (!strategy) continue;
+
+    const bootstrapTargetRoom =
+      role === "bootstrapper" ? pickBootstrapTargetRoom(spawn.room.name, strategy.bootstrapTargetRooms) : undefined;
+    if (role === "bootstrapper" && !bootstrapTargetRoom) continue;
 
     const energyBudget = spawn.room.energyAvailable;
     const body = buildBody(role, energyBudget);
@@ -62,7 +88,8 @@ export function runSpawnManager(): void {
       memory: {
         role,
         homeRoom: spawn.room.name,
-        working: false
+        working: false,
+        targetRoom: bootstrapTargetRoom
       }
     });
   }
