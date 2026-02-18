@@ -64,14 +64,16 @@ export function deriveDesiredRoles(
 
   if (stage !== "bootstrap") {
     const canRunDedicatedMiners = snapshot.energyCapacityAvailable >= 400;
+    const minersPerSource = stage === "early" ? 1 : Math.max(1, COLONY_SETTINGS.planner.minersPerSource);
+    const dedicatedHaulersPerSource = Math.max(0, COLONY_SETTINGS.planner.dedicatedHaulersPerSource);
+    const freeHaulers = stage === "early" ? 0 : Math.max(0, COLONY_SETTINGS.planner.freeHaulers);
     desired.harvester = canRunDedicatedMiners
       ? Math.min(desired.harvester, 1)
       : Math.max(COLONY_SETTINGS.planner.minHarvesters, snapshot.sourceCount);
-    desired.miner = canRunDedicatedMiners ? snapshot.sourceCount * Math.max(1, COLONY_SETTINGS.planner.minersPerSource) : 0;
+    desired.miner = canRunDedicatedMiners ? snapshot.sourceCount * minersPerSource : 0;
     desired.hauler = Math.max(
       desired.hauler,
-      snapshot.sourceCount * Math.max(0, COLONY_SETTINGS.planner.dedicatedHaulersPerSource) +
-        Math.max(0, COLONY_SETTINGS.planner.freeHaulers)
+      snapshot.sourceCount * dedicatedHaulersPerSource + freeHaulers
     );
     desired.upgrader = COLONY_SETTINGS.planner.upgradersByStage[stage];
     desired.builder =

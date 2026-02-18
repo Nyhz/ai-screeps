@@ -339,6 +339,25 @@ function placeSourceContainers(room: Room, anchor: RoomPosition): void {
   }
 }
 
+function sourceContainerDeficit(room: Room): number {
+  const sources = room.find(FIND_SOURCES);
+  let deficit = 0;
+
+  for (const source of sources) {
+    const hasContainer = source.pos.findInRange(FIND_STRUCTURES, 1, {
+      filter: (structure: Structure) => structure.structureType === STRUCTURE_CONTAINER
+    }).length;
+    const hasContainerSite = source.pos.findInRange(FIND_CONSTRUCTION_SITES, 1, {
+      filter: (site: ConstructionSite) => site.structureType === STRUCTURE_CONTAINER
+    }).length;
+    if (hasContainer + hasContainerSite === 0) {
+      deficit += 1;
+    }
+  }
+
+  return deficit;
+}
+
 function placeTowers(room: Room, anchor: RoomPosition): void {
   const max = CONTROLLER_STRUCTURES[STRUCTURE_TOWER][room.controller?.level ?? 0] ?? 0;
   if (max === 0) return;
@@ -516,8 +535,7 @@ export function runConstructionManager(): void {
     const anchor = getRoomAnchor(room);
     if (!anchor) continue;
 
-    const siteCount = room.find(FIND_CONSTRUCTION_SITES).length;
-    if (siteCount > COLONY_SETTINGS.construction.maxRoomConstructionSites) continue;
+    const maxSites = COLONY_SETTINGS.construction.maxRoomConstructionSites;
 
     if (COLONY_SETTINGS.construction.autoPlaceSpawnInClaimedRooms) {
       const hasSpawn = room.find(FIND_MY_SPAWNS).length > 0;
@@ -530,9 +548,17 @@ export function runConstructionManager(): void {
       }
     }
 
+    // Reserve construction-site budget for one source container per source before expanding other queues.
+    const reservedContainerSlots = Math.max(0, sourceContainerDeficit(room));
+    const nonContainerSiteBudget = Math.max(0, maxSites - reservedContainerSlots);
+
+    placeSourceContainers(room, anchor);
+
+    const siteCountAfterContainers = room.find(FIND_CONSTRUCTION_SITES).length;
+    if (siteCountAfterContainers > nonContainerSiteBudget) continue;
+
     placeSourceExtensions(room, anchor);
     placeCoreExtensions(room, anchor);
-    placeSourceContainers(room, anchor);
     placeCoreLogistics(room, anchor);
     placeLabCluster(room, anchor);
     placeSourceAndControllerLinks(room, anchor);
