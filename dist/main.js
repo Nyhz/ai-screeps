@@ -75,6 +75,123 @@ function collectRoomSnapshot(room) {
   };
 }
 
+// src/config/settings.ts
+var COLONY_SETTINGS = {
+  pvp: {
+    enabled: false,
+    noAttackRooms: []
+  },
+  stage: {
+    towersMinRcl: 3,
+    wallsMinRcl: 4,
+    remoteMiningMinRcl: 3,
+    remoteMiningMinEnergyCapacity: 800,
+    expansionMinRcl: 4,
+    offenseMinRcl: 6,
+    offenseMinStorageEnergy: 1e5
+  },
+  planner: {
+    minHarvesters: 2,
+    baseHaulers: 1,
+    baseUpgraders: 1,
+    buildersWhenSitesExist: 2,
+    buildersWhenNoSites: 1,
+    heavyBuildSiteThreshold: 5,
+    heavyBuilderCount: 3,
+    upgradersByStage: {
+      bootstrap: 1,
+      early: 2,
+      mid: 3,
+      late: 3
+    },
+    repairersWhenEstablished: 1,
+    scoutCount: 1,
+    reserverCount: 1,
+    claimerCount: 1,
+    minSoldiers: 2,
+    hostilesPerSoldier: 2
+  },
+  construction: {
+    runInterval: 37,
+    maxRoomConstructionSites: 10
+  },
+  defense: {
+    wallRepairCap: 2e5,
+    structureRepairCap: 3e5
+  },
+  walls: {
+    targetHitsByRcl: {
+      1: 5e3,
+      2: 2e4,
+      3: 1e5,
+      4: 1e5,
+      5: 2e5,
+      6: 5e5,
+      7: 1e6,
+      8: 2e6
+    }
+  },
+  energy: {
+    pickupDroppedEnergyMinAmount: 50,
+    haulerContainerWithdrawMinEnergy: 100
+  },
+  movement: {
+    maxRoomsPerPath: 16,
+    defaultRange: 1
+  },
+  roleTargets: {
+    default: {},
+    byStage: {
+      bootstrap: {},
+      early: {},
+      mid: {},
+      late: {}
+    }
+  },
+  rooms: {
+    // Example:
+    // W1N1: {
+    //   disablePvP: true,
+    //   noAttackRooms: ["W1N2"],
+    //   roleTargets: { upgrader: 3, builder: 2 },
+    //   roleTargetsByStage: { mid: { reserver: 2 } }
+    // }
+  }
+};
+function unique(values) {
+  return [...new Set(values)];
+}
+function resolveRoomSettings(roomName) {
+  var _a, _b, _c, _d, _e, _f;
+  const roomSettings = COLONY_SETTINGS.rooms[roomName];
+  return {
+    roleTargets: (_a = roomSettings == null ? void 0 : roomSettings.roleTargets) != null ? _a : {},
+    roleTargetsByStage: (_b = roomSettings == null ? void 0 : roomSettings.roleTargetsByStage) != null ? _b : {},
+    disablePvP: (_c = roomSettings == null ? void 0 : roomSettings.disablePvP) != null ? _c : false,
+    noAttackRooms: unique([...(_d = COLONY_SETTINGS.pvp.noAttackRooms) != null ? _d : [], ...(_e = roomSettings == null ? void 0 : roomSettings.noAttackRooms) != null ? _e : []]),
+    remoteRoomAllowlist: roomSettings == null ? void 0 : roomSettings.remoteRoomAllowlist,
+    remoteRoomBlocklist: (_f = roomSettings == null ? void 0 : roomSettings.remoteRoomBlocklist) != null ? _f : []
+  };
+}
+function isAttackAllowed(homeRoom, targetRoom) {
+  const roomSettings = resolveRoomSettings(homeRoom);
+  if (!COLONY_SETTINGS.pvp.enabled || roomSettings.disablePvP) return false;
+  return !roomSettings.noAttackRooms.includes(targetRoom);
+}
+function isRemoteRoomAllowed(homeRoom, targetRoom) {
+  const roomSettings = resolveRoomSettings(homeRoom);
+  if (roomSettings.remoteRoomBlocklist.includes(targetRoom)) return false;
+  if (roomSettings.remoteRoomAllowlist && roomSettings.remoteRoomAllowlist.length > 0) {
+    return roomSettings.remoteRoomAllowlist.includes(targetRoom);
+  }
+  return true;
+}
+function getWallTargetHits(rcl) {
+  const target = COLONY_SETTINGS.walls.targetHitsByRcl[rcl];
+  if (target) return target;
+  return rcl >= 8 ? COLONY_SETTINGS.walls.targetHitsByRcl[8] : COLONY_SETTINGS.walls.targetHitsByRcl[1];
+}
+
 // src/colony/spawnPlanner.ts
 function baseDesired() {
   const desired = {};
@@ -83,32 +200,48 @@ function baseDesired() {
   }
   return desired;
 }
+function applyRoleOverrides(target, overrides) {
+  for (const role of ROLE_ORDER) {
+    const desired = overrides[role];
+    if (desired === void 0) continue;
+    target[role] = Math.max(0, desired);
+  }
+}
 function deriveDesiredRoles(snapshot, stage, capabilities) {
+  var _a, _b;
   const desired = baseDesired();
-  desired.harvester = Math.max(2, snapshot.sourceCount);
-  desired.hauler = 1;
-  desired.upgrader = 1;
-  desired.builder = snapshot.constructionSiteCount > 0 ? 2 : 1;
+  const roomSettings = resolveRoomSettings(snapshot.roomName);
+  desired.harvester = Math.max(COLONY_SETTINGS.planner.minHarvesters, snapshot.sourceCount);
+  desired.hauler = COLONY_SETTINGS.planner.baseHaulers;
+  desired.upgrader = COLONY_SETTINGS.planner.baseUpgraders;
+  desired.builder = snapshot.constructionSiteCount > 0 ? COLONY_SETTINGS.planner.buildersWhenSitesExist : COLONY_SETTINGS.planner.buildersWhenNoSites;
   if (stage !== "bootstrap") {
     desired.miner = snapshot.sourceCount;
-    desired.hauler = Math.max(desired.hauler, snapshot.sourceCount);
-    desired.upgrader = stage === "early" ? 2 : 3;
-    desired.builder = snapshot.constructionSiteCount > 5 ? 3 : desired.builder;
-    desired.repairer = 1;
+    desired.hauler = Math.max(desired.hauler, snapshot.sourceCount, COLONY_SETTINGS.planner.baseHaulers);
+    desired.upgrader = COLONY_SETTINGS.planner.upgradersByStage[stage];
+    desired.builder = snapshot.constructionSiteCount > COLONY_SETTINGS.planner.heavyBuildSiteThreshold ? COLONY_SETTINGS.planner.heavyBuilderCount : desired.builder;
+    desired.repairer = COLONY_SETTINGS.planner.repairersWhenEstablished;
   }
   if (capabilities.allowWalls) {
     desired.waller = 1;
   }
   if (capabilities.allowRemoteMining) {
-    desired.scout = 1;
-    desired.reserver = 1;
+    desired.scout = COLONY_SETTINGS.planner.scoutCount;
+    desired.reserver = COLONY_SETTINGS.planner.reserverCount;
   }
   if (capabilities.allowExpansion) {
-    desired.claimer = 1;
+    desired.claimer = COLONY_SETTINGS.planner.claimerCount;
   }
   if (capabilities.allowOffense) {
-    desired.soldier = Math.max(2, Math.ceil(snapshot.hostileCount / 2));
+    desired.soldier = Math.max(
+      COLONY_SETTINGS.planner.minSoldiers,
+      Math.ceil(snapshot.hostileCount / Math.max(1, COLONY_SETTINGS.planner.hostilesPerSoldier))
+    );
   }
+  applyRoleOverrides(desired, COLONY_SETTINGS.roleTargets.default);
+  applyRoleOverrides(desired, (_a = COLONY_SETTINGS.roleTargets.byStage[stage]) != null ? _a : {});
+  applyRoleOverrides(desired, roomSettings.roleTargets);
+  applyRoleOverrides(desired, (_b = roomSettings.roleTargetsByStage[stage]) != null ? _b : {});
   return desired;
 }
 
@@ -138,17 +271,19 @@ function ownedRoomCount() {
 function canExpand(snapshot) {
   const gclLevel = Game.gcl.level;
   const myRooms = ownedRoomCount();
-  return snapshot.rcl >= 4 && gclLevel > myRooms;
+  return snapshot.rcl >= COLONY_SETTINGS.stage.expansionMinRcl && gclLevel > myRooms;
 }
 function canAttack(snapshot) {
-  return snapshot.rcl >= 6 && snapshot.storageEnergy >= 1e5;
+  const roomSettings = resolveRoomSettings(snapshot.roomName);
+  if (!COLONY_SETTINGS.pvp.enabled || roomSettings.disablePvP) return false;
+  return snapshot.rcl >= COLONY_SETTINGS.stage.offenseMinRcl && snapshot.storageEnergy >= COLONY_SETTINGS.stage.offenseMinStorageEnergy;
 }
 function deriveCapabilities(snapshot, stage) {
   return {
     allowRoads: stage !== "bootstrap",
-    allowTowers: snapshot.rcl >= 3,
-    allowWalls: snapshot.rcl >= 4,
-    allowRemoteMining: snapshot.rcl >= 3 && snapshot.energyCapacityAvailable >= 800,
+    allowTowers: snapshot.rcl >= COLONY_SETTINGS.stage.towersMinRcl,
+    allowWalls: snapshot.rcl >= COLONY_SETTINGS.stage.wallsMinRcl,
+    allowRemoteMining: snapshot.rcl >= COLONY_SETTINGS.stage.remoteMiningMinRcl && snapshot.energyCapacityAvailable >= COLONY_SETTINGS.stage.remoteMiningMinEnergyCapacity,
     allowExpansion: canExpand(snapshot),
     allowOffense: canAttack(snapshot)
   };
@@ -160,24 +295,26 @@ function deriveStageAndCapabilities(snapshot) {
 }
 
 // src/colony/strategyManager.ts
-function unique(values) {
+function unique2(values) {
   return [...new Set(values)];
 }
 function neighboringRooms(room) {
   const exits = Game.map.describeExits(room.name);
   if (!exits) return [];
-  return unique(Object.values(exits));
+  return unique2(Object.values(exits));
 }
 function deriveTargetRooms(room, strategy) {
   const visibleNeighbors = neighboringRooms(room);
+  const allowedRemoteNeighbors = visibleNeighbors.filter((name) => isRemoteRoomAllowed(room.name, name));
   const scoutTargetRooms = visibleNeighbors;
-  const reserveTargetRooms = strategy.capabilities.allowRemoteMining ? visibleNeighbors : [];
-  const claimTargetRooms = strategy.capabilities.allowExpansion ? visibleNeighbors.filter((name) => {
+  const reserveTargetRooms = strategy.capabilities.allowRemoteMining ? allowedRemoteNeighbors : [];
+  const claimTargetRooms = strategy.capabilities.allowExpansion ? allowedRemoteNeighbors.filter((name) => {
     const targetRoom = Game.rooms[name];
     if (!(targetRoom == null ? void 0 : targetRoom.controller)) return true;
     return !targetRoom.controller.owner && !targetRoom.controller.reservation;
   }) : [];
   const attackTargetRooms = strategy.capabilities.allowOffense ? visibleNeighbors.filter((name) => {
+    if (!isAttackAllowed(room.name, name)) return false;
     const targetRoom = Game.rooms[name];
     if (!targetRoom) return false;
     return targetRoom.find(FIND_HOSTILE_CREEPS).length > 0;
@@ -313,7 +450,7 @@ function placeDefensiveRing(room, anchor) {
 }
 function runConstructionManager() {
   var _a, _b;
-  if (Game.time % 37 !== 0) return;
+  if (Game.time % COLONY_SETTINGS.construction.runInterval !== 0) return;
   for (const room of Object.values(Game.rooms)) {
     if (!((_a = room.controller) == null ? void 0 : _a.my)) continue;
     const mySpawn = room.find(FIND_MY_SPAWNS)[0];
@@ -321,7 +458,7 @@ function runConstructionManager() {
     const strategy = (_b = Memory.strategy) == null ? void 0 : _b[room.name];
     if (!strategy) continue;
     const siteCount = room.find(FIND_CONSTRUCTION_SITES).length;
-    if (siteCount > 10) continue;
+    if (siteCount > COLONY_SETTINGS.construction.maxRoomConstructionSites) continue;
     const anchor = mySpawn.pos;
     placeExtensions(room, anchor);
     placeSourceContainers(room, anchor);
@@ -359,9 +496,9 @@ function runDefenseManager() {
     const repairTarget = tower.pos.findClosestByRange(FIND_STRUCTURES, {
       filter: (structure) => {
         if (structure.structureType === STRUCTURE_WALL || structure.structureType === STRUCTURE_RAMPART) {
-          return structure.hits < 2e5;
+          return structure.hits < COLONY_SETTINGS.defense.wallRepairCap;
         }
-        return structure.hits < structure.hitsMax && structure.hits < 3e5;
+        return structure.hits < structure.hitsMax && structure.hits < COLONY_SETTINGS.defense.structureRepairCap;
       }
     });
     if (repairTarget) {
@@ -463,8 +600,8 @@ function runSpawnManager() {
 function moveToTarget(creep, target, range = 1) {
   creep.moveTo(target, {
     reusePath: 10,
-    maxRooms: 1,
-    range,
+    maxRooms: COLONY_SETTINGS.movement.maxRoomsPerPath,
+    range: range != null ? range : COLONY_SETTINGS.movement.defaultRange,
     visualizePathStyle: { stroke: "#8ecae6" }
   });
 }
@@ -604,7 +741,7 @@ function withdrawStoredEnergy(creep) {
 }
 function pickupDroppedEnergy(creep) {
   const resource = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
-    filter: (dropped) => dropped.resourceType === RESOURCE_ENERGY && dropped.amount > 50
+    filter: (dropped) => dropped.resourceType === RESOURCE_ENERGY && dropped.amount > COLONY_SETTINGS.energy.pickupDroppedEnergyMinAmount
   });
   if (!resource) return false;
   const result = creep.pickup(resource);
@@ -686,6 +823,7 @@ function claimRoomController(creep, roomName) {
   return result === OK;
 }
 function attackInRoom(creep, roomName) {
+  if (!isAttackAllowed(creep.memory.homeRoom, roomName)) return false;
   if (creep.room.name !== roomName) {
     moveToRoomCenter(creep, roomName);
     return true;
@@ -737,7 +875,7 @@ function withdrawFromSourceContainers(creep) {
     filter: (structure) => {
       if (structure.structureType !== STRUCTURE_CONTAINER) return false;
       const container = structure;
-      return container.store.getUsedCapacity(RESOURCE_ENERGY) >= 100;
+      return container.store.getUsedCapacity(RESOURCE_ENERGY) >= COLONY_SETTINGS.energy.haulerContainerWithdrawMinEnergy;
     }
   });
   if (!target) return false;
@@ -831,18 +969,15 @@ function runUpgrader(creep) {
 }
 
 // src/roles/waller.ts
-function wallHitTarget(room) {
-  var _a, _b;
-  const rcl = (_b = (_a = room.controller) == null ? void 0 : _a.level) != null ? _b : 1;
-  return rcl >= 8 ? 2e6 : rcl >= 6 ? 5e5 : 1e5;
-}
 function runWaller(creep) {
+  var _a, _b;
   updateWorkingState(creep);
   if (!creep.memory.working) {
     acquireEnergy(creep);
     return;
   }
-  if (fortifyDefenses(creep, wallHitTarget(creep.room))) return;
+  const rcl = (_b = (_a = creep.room.controller) == null ? void 0 : _a.level) != null ? _b : 1;
+  if (fortifyDefenses(creep, getWallTargetHits(rcl))) return;
   upgradeController(creep);
 }
 

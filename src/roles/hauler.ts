@@ -1,4 +1,5 @@
 import { fillPriorityEnergyTargets, pickupDroppedEnergy, withdrawStoredEnergy } from "../tasks/energy";
+import { COLONY_SETTINGS } from "../config/settings";
 import { updateWorkingState } from "./common";
 
 function withdrawFromSourceContainers(creep: Creep): boolean {
@@ -6,7 +7,7 @@ function withdrawFromSourceContainers(creep: Creep): boolean {
     filter: (structure: Structure) => {
       if (structure.structureType !== STRUCTURE_CONTAINER) return false;
       const container = structure as StructureContainer;
-      return container.store.getUsedCapacity(RESOURCE_ENERGY) >= 100;
+      return container.store.getUsedCapacity(RESOURCE_ENERGY) >= COLONY_SETTINGS.energy.haulerContainerWithdrawMinEnergy;
     }
   }) as StructureContainer | null;
 

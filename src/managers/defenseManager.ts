@@ -1,3 +1,5 @@
+import { COLONY_SETTINGS } from "../config/settings";
+
 export function runDefenseManager(): void {
   const towers = _.filter(
     Object.values(Game.structures),
@@ -23,10 +25,10 @@ export function runDefenseManager(): void {
     const repairTarget = tower.pos.findClosestByRange(FIND_STRUCTURES, {
       filter: (structure: Structure) => {
         if (structure.structureType === STRUCTURE_WALL || structure.structureType === STRUCTURE_RAMPART) {
-          return structure.hits < 200000;
+          return structure.hits < COLONY_SETTINGS.defense.wallRepairCap;
         }
 
-        return structure.hits < structure.hitsMax && structure.hits < 300000;
+        return structure.hits < structure.hitsMax && structure.hits < COLONY_SETTINGS.defense.structureRepairCap;
       }
     });
 

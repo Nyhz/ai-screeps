@@ -1,4 +1,5 @@
 import { STAGE_THRESHOLDS, type CapabilityFlags, type ColonyStage } from "../config/colonyStages";
+import { COLONY_SETTINGS, resolveRoomSettings } from "../config/settings";
 import type { RoomSnapshot } from "./types";
 
 function deriveStage(snapshot: RoomSnapshot): ColonyStage {
@@ -18,19 +19,26 @@ function ownedRoomCount(): number {
 function canExpand(snapshot: RoomSnapshot): boolean {
   const gclLevel = Game.gcl.level;
   const myRooms = ownedRoomCount();
-  return snapshot.rcl >= 4 && gclLevel > myRooms;
+  return snapshot.rcl >= COLONY_SETTINGS.stage.expansionMinRcl && gclLevel > myRooms;
 }
 
 function canAttack(snapshot: RoomSnapshot): boolean {
-  return snapshot.rcl >= 6 && snapshot.storageEnergy >= 100000;
+  const roomSettings = resolveRoomSettings(snapshot.roomName);
+  if (!COLONY_SETTINGS.pvp.enabled || roomSettings.disablePvP) return false;
+  return (
+    snapshot.rcl >= COLONY_SETTINGS.stage.offenseMinRcl &&
+    snapshot.storageEnergy >= COLONY_SETTINGS.stage.offenseMinStorageEnergy
+  );
 }
 
 export function deriveCapabilities(snapshot: RoomSnapshot, stage: ColonyStage): CapabilityFlags {
   return {
     allowRoads: stage !== "bootstrap",
-    allowTowers: snapshot.rcl >= 3,
-    allowWalls: snapshot.rcl >= 4,
-    allowRemoteMining: snapshot.rcl >= 3 && snapshot.energyCapacityAvailable >= 800,
+    allowTowers: snapshot.rcl >= COLONY_SETTINGS.stage.towersMinRcl,
+    allowWalls: snapshot.rcl >= COLONY_SETTINGS.stage.wallsMinRcl,
+    allowRemoteMining:
+      snapshot.rcl >= COLONY_SETTINGS.stage.remoteMiningMinRcl &&
+      snapshot.energyCapacityAvailable >= COLONY_SETTINGS.stage.remoteMiningMinEnergyCapacity,
     allowExpansion: canExpand(snapshot),
     allowOffense: canAttack(snapshot)
   };

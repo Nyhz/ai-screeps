@@ -1,4 +1,5 @@
 import type { ColonyStrategy } from "./types";
+import { isAttackAllowed, isRemoteRoomAllowed } from "../config/settings";
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
@@ -12,12 +13,13 @@ function neighboringRooms(room: Room): string[] {
 
 export function deriveTargetRooms(room: Room, strategy: ColonyStrategy): ColonyStrategy {
   const visibleNeighbors = neighboringRooms(room);
+  const allowedRemoteNeighbors = visibleNeighbors.filter((name) => isRemoteRoomAllowed(room.name, name));
 
   const scoutTargetRooms = visibleNeighbors;
-  const reserveTargetRooms = strategy.capabilities.allowRemoteMining ? visibleNeighbors : [];
+  const reserveTargetRooms = strategy.capabilities.allowRemoteMining ? allowedRemoteNeighbors : [];
 
   const claimTargetRooms = strategy.capabilities.allowExpansion
-    ? visibleNeighbors.filter((name) => {
+    ? allowedRemoteNeighbors.filter((name) => {
         const targetRoom = Game.rooms[name];
         if (!targetRoom?.controller) return true;
         return !targetRoom.controller.owner && !targetRoom.controller.reservation;
@@ -26,6 +28,7 @@ export function deriveTargetRooms(room: Room, strategy: ColonyStrategy): ColonyS
 
   const attackTargetRooms = strategy.capabilities.allowOffense
     ? visibleNeighbors.filter((name) => {
+        if (!isAttackAllowed(room.name, name)) return false;
         const targetRoom = Game.rooms[name];
         if (!targetRoom) return false;
         return targetRoom.find(FIND_HOSTILE_CREEPS).length > 0;

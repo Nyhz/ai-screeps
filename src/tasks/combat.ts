@@ -1,4 +1,5 @@
 import { moveToRoomCenter, moveToTarget } from "./movement";
+import { isAttackAllowed } from "../config/settings";
 
 export function reserveRoomController(creep: Creep, roomName: string): boolean {
   if (creep.room.name !== roomName) {
@@ -37,6 +38,8 @@ export function claimRoomController(creep: Creep, roomName: string): boolean {
 }
 
 export function attackInRoom(creep: Creep, roomName: string): boolean {
+  if (!isAttackAllowed(creep.memory.homeRoom, roomName)) return false;
+
   if (creep.room.name !== roomName) {
     moveToRoomCenter(creep, roomName);
     return true;

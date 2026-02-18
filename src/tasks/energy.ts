@@ -1,3 +1,4 @@
+import { COLONY_SETTINGS } from "../config/settings";
 import { moveToTarget } from "./movement";
 
 function isSourceWorker(creep: Creep): boolean {
@@ -97,7 +98,8 @@ export function withdrawStoredEnergy(creep: Creep): boolean {
 
 export function pickupDroppedEnergy(creep: Creep): boolean {
   const resource = creep.pos.findClosestByPath(FIND_DROPPED_RESOURCES, {
-    filter: (dropped: Resource) => dropped.resourceType === RESOURCE_ENERGY && dropped.amount > 50
+    filter: (dropped: Resource) =>
+      dropped.resourceType === RESOURCE_ENERGY && dropped.amount > COLONY_SETTINGS.energy.pickupDroppedEnergyMinAmount
   });
 
   if (!resource) return false;

@@ -1,3 +1,5 @@
+import { COLONY_SETTINGS } from "../config/settings";
+
 function placeIfFree(room: Room, x: number, y: number, structureType: BuildableStructureConstant): void {
   if (x < 1 || x > 48 || y < 1 || y > 48) return;
 
@@ -110,7 +112,7 @@ function placeDefensiveRing(room: Room, anchor: RoomPosition): void {
 }
 
 export function runConstructionManager(): void {
-  if (Game.time % 37 !== 0) return;
+  if (Game.time % COLONY_SETTINGS.construction.runInterval !== 0) return;
 
   for (const room of Object.values(Game.rooms)) {
     if (!room.controller?.my) continue;
@@ -122,7 +124,7 @@ export function runConstructionManager(): void {
     if (!strategy) continue;
 
     const siteCount = room.find(FIND_CONSTRUCTION_SITES).length;
-    if (siteCount > 10) continue;
+    if (siteCount > COLONY_SETTINGS.construction.maxRoomConstructionSites) continue;
 
     const anchor = mySpawn.pos;
     placeExtensions(room, anchor);

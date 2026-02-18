@@ -1,10 +1,6 @@
+import { getWallTargetHits } from "../config/settings";
 import { fortifyDefenses, upgradeController } from "../tasks/work";
 import { updateWorkingState, acquireEnergy } from "./common";
-
-function wallHitTarget(room: Room): number {
-  const rcl = room.controller?.level ?? 1;
-  return rcl >= 8 ? 2000000 : rcl >= 6 ? 500000 : 100000;
-}
 
 export function runWaller(creep: Creep): void {
   updateWorkingState(creep);
@@ -14,6 +10,7 @@ export function runWaller(creep: Creep): void {
     return;
   }
 
-  if (fortifyDefenses(creep, wallHitTarget(creep.room))) return;
+  const rcl = creep.room.controller?.level ?? 1;
+  if (fortifyDefenses(creep, getWallTargetHits(rcl))) return;
   upgradeController(creep);
 }
