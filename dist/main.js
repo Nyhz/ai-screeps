@@ -129,6 +129,9 @@ var COLONY_SETTINGS = {
     minSoldiers: 2,
     hostilesPerSoldier: 2
   },
+  spawn: {
+    reserveEnergyRatio: 0.3
+  },
   construction: {
     runInterval: 37,
     maxRoomConstructionSites: 10,
@@ -1470,6 +1473,22 @@ function nextRoleToSpawn(spawn) {
   }
   return null;
 }
+function shouldBypassEnergyGate(spawn, role) {
+  const current = Object.values(Game.creeps).filter((creep) => creep.memory.homeRoom === spawn.room.name);
+  if (current.length === 0) return true;
+  if (role === "harvester") {
+    const harvesters = current.filter((creep) => creep.memory.role === "harvester").length;
+    if (harvesters === 0) return true;
+  }
+  if (role === "hauler") {
+    const haulers = current.filter((creep) => creep.memory.role === "hauler").length;
+    if (haulers === 0) return true;
+  }
+  if (role === "soldier" && getEmergencySoldierCount(spawn.room.name) > 0) {
+    return true;
+  }
+  return false;
+}
 function pickBootstrapTargetRoom(homeRoom, targets) {
   if (targets.length === 0) return void 0;
   let bestTarget;
@@ -1534,6 +1553,11 @@ function runSpawnManager() {
     const localEmergency = getEmergencySoldierCount(spawn.room.name);
     const reinforcementTargetRoom = role === "soldier" && localEmergency === 0 ? pickReinforcementTarget(spawn.room.name) : void 0;
     const targetRoom = bootstrapTargetRoom != null ? bootstrapTargetRoom : reinforcementTargetRoom;
+    const reserveRatio = Math.max(0, Math.min(0.95, COLONY_SETTINGS.spawn.reserveEnergyRatio));
+    const minFillRatio = 1 - reserveRatio;
+    const requiredEnergy = Math.ceil(spawn.room.energyCapacityAvailable * minFillRatio);
+    const bypassEnergyGate = shouldBypassEnergyGate(spawn, role);
+    if (!bypassEnergyGate && spawn.room.energyAvailable < requiredEnergy) continue;
     const energyBudget = spawn.room.energyAvailable;
     const body = buildBody(role, energyBudget);
     if (!body) continue;

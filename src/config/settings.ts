@@ -71,6 +71,9 @@ export const COLONY_SETTINGS = {
     minSoldiers: 2,
     hostilesPerSoldier: 2
   },
+  spawn: {
+    reserveEnergyRatio: 0.3
+  },
   construction: {
     runInterval: 37,
     maxRoomConstructionSites: 10,
