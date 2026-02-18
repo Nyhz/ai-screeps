@@ -40,6 +40,7 @@ npm run push
 ```text
 COLONY_SETTINGS
 +- pvp            -> Global combat policy + protected rooms
++- combat         -> Adaptive defense/offense behavior and threat thresholds
 +- stage          -> Unlock thresholds for towers/walls/remote/expansion/offense
 +- planner        -> Base spawn logic knobs
 +- construction   -> How often and how much to place
@@ -50,6 +51,7 @@ COLONY_SETTINGS
 +- movement       -> Pathfinding room span + target range defaults
 +- logistics      -> Core delivery behavior near spawn
 +- links          -> Link network routing and transfer thresholds
++- telemetry      -> Runtime state/threat logging cadence
 +- layout         -> Adaptive room anchor selection for long-term planning
 +- expansion      -> Manual room conquest control (default) or auto-neighbor mode
 +- roleTargets    -> Global and per-stage hard overrides
@@ -80,6 +82,23 @@ If two settings define the same role, the later item in the list wins.
 |---|---|---:|---|---|
 | `pvp.enabled` | `boolean` | `false` | `true`, `false` | Master switch for offensive behavior. If `false`, offensive targeting is disabled globally. |
 | `pvp.noAttackRooms` | `string[]` | `[]` | Any Screeps room names, e.g. `['W8N3']` | Global protected list. Your creeps will not attack these rooms even if PvP is enabled. |
+
+### `combat`
+
+| Variable | Type | Default | Possible values | Effect |
+|---|---|---:|---|---|
+| `combat.offenseEnabled` | `boolean` | `false` | `true`, `false` | Enables proactive attacks into non-owned rooms (still subject to PvP rules/whitelist). |
+| `combat.defenseEnabled` | `boolean` | `true` | `true`, `false` | Enables reactive defense in owned rooms when hostiles are detected. |
+| `combat.defendEvenIfOffenseDisabled` | `boolean` | `true` | `true`, `false` | Allows defenders to engage hostiles even when offense is globally disabled. |
+| `combat.threatDecayTicks` | `number` | `30` | `1+` | Keeps recent threat active for N ticks after hostiles disappear (prevents oscillation). |
+| `combat.lowThreatScore` | `number` | `20` | `0+` | Threat score threshold for `low`. |
+| `combat.mediumThreatScore` | `number` | `60` | `0+` | Threat score threshold for `medium`. |
+| `combat.highThreatScore` | `number` | `120` | `0+` | Threat score threshold for `high`. |
+| `combat.criticalThreatScore` | `number` | `220` | `0+` | Threat score threshold for `critical`. |
+| `combat.emergencySoldiersAtMedium` | `number` | `1` | `0+` | Emergency soldier target when room threat is `medium`. |
+| `combat.emergencySoldiersAtHigh` | `number` | `2` | `0+` | Emergency soldier target when room threat is `high`. |
+| `combat.emergencySoldiersAtCritical` | `number` | `4` | `0+` | Emergency soldier target when room threat is `critical`. |
+| `combat.safeModeThreatLevel` | union | `critical` | `none/low/medium/high/critical` | Minimum threat level required for auto safe mode consideration. |
 
 ### `stage`
 
@@ -233,6 +252,13 @@ Routing priority:
 | `links.senderMinEnergy` | `number` | `400` | `0+` | Minimum energy a sender link must hold before transfer attempts. |
 | `links.receiverMinFreeCapacity` | `number` | `200` | `0+` | Minimum free capacity required for receiver links. |
 | `links.controllerLinkTargetLevel` | `number` | `600` | `0-800` | Controller link is treated as needing refill below this energy level. |
+
+### `telemetry`
+
+| Variable | Type | Default | Possible values | Effect |
+|---|---|---:|---|---|
+| `telemetry.enabled` | `boolean` | `true` | `true`, `false` | Enables periodic telemetry logs for room state/threat/expansion. |
+| `telemetry.interval` | `number` | `50` | `1+` | Prints telemetry every N ticks. |
 
 ### `layout`
 

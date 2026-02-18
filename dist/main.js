@@ -84,6 +84,20 @@ var COLONY_SETTINGS = {
     enabled: false,
     noAttackRooms: []
   },
+  combat: {
+    offenseEnabled: false,
+    defenseEnabled: true,
+    defendEvenIfOffenseDisabled: true,
+    threatDecayTicks: 30,
+    lowThreatScore: 20,
+    mediumThreatScore: 60,
+    highThreatScore: 120,
+    criticalThreatScore: 220,
+    emergencySoldiersAtMedium: 1,
+    emergencySoldiersAtHigh: 2,
+    emergencySoldiersAtCritical: 4,
+    safeModeThreatLevel: "critical"
+  },
   stage: {
     towersMinRcl: 3,
     wallsMinRcl: 4,
@@ -168,6 +182,10 @@ var COLONY_SETTINGS = {
     receiverMinFreeCapacity: 200,
     controllerLinkTargetLevel: 600
   },
+  telemetry: {
+    enabled: true,
+    interval: 50
+  },
   layout: {
     scanMin: 6,
     scanMax: 43,
@@ -219,7 +237,8 @@ function resolveRoomSettings(roomName) {
 }
 function isAttackAllowed(homeRoom, targetRoom) {
   const roomSettings = resolveRoomSettings(homeRoom);
-  if (!COLONY_SETTINGS.pvp.enabled || roomSettings.disablePvP) return false;
+  const offenseEnabled = COLONY_SETTINGS.combat.offenseEnabled && COLONY_SETTINGS.pvp.enabled;
+  if (!offenseEnabled || roomSettings.disablePvP) return false;
   return !roomSettings.noAttackRooms.includes(targetRoom);
 }
 function isRemoteRoomAllowed(homeRoom, targetRoom) {
@@ -284,6 +303,176 @@ function getWallTargetHits(rcl) {
   return rcl >= 8 ? COLONY_SETTINGS.walls.targetHitsByRcl[8] : COLONY_SETTINGS.walls.targetHitsByRcl[1];
 }
 
+// src/managers/threatManager.ts
+function partWeight(part) {
+  switch (part) {
+    case ATTACK:
+      return 12;
+    case RANGED_ATTACK:
+      return 14;
+    case HEAL:
+      return 18;
+    case WORK:
+      return 6;
+    case TOUGH:
+      return 2;
+    case MOVE:
+      return 1;
+    default:
+      return 0;
+  }
+}
+function scoreHostile(hostile) {
+  let score = 0;
+  let attackParts = 0;
+  let rangedParts = 0;
+  let healParts = 0;
+  let workParts = 0;
+  for (const bodyPart of hostile.body) {
+    if (bodyPart.hits <= 0) continue;
+    score += partWeight(bodyPart.type);
+    if (bodyPart.type === ATTACK) attackParts += 1;
+    if (bodyPart.type === RANGED_ATTACK) rangedParts += 1;
+    if (bodyPart.type === HEAL) healParts += 1;
+    if (bodyPart.type === WORK) workParts += 1;
+  }
+  return { score, attackParts, rangedParts, healParts, workParts };
+}
+function threatLevelFromScore(score) {
+  if (score >= COLONY_SETTINGS.combat.criticalThreatScore) return "critical";
+  if (score >= COLONY_SETTINGS.combat.highThreatScore) return "high";
+  if (score >= COLONY_SETTINGS.combat.mediumThreatScore) return "medium";
+  if (score >= COLONY_SETTINGS.combat.lowThreatScore) return "low";
+  return "none";
+}
+function threatLevelRank(level) {
+  switch (level) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
+}
+function ensureThreatMemory() {
+  if (!Memory.threat) {
+    Memory.threat = {};
+  }
+  return Memory.threat;
+}
+function ensureRoomStateMemory() {
+  if (!Memory.roomState) {
+    Memory.roomState = {};
+  }
+  return Memory.roomState;
+}
+function setRoomState(room, threatLevel2) {
+  var _a, _b;
+  const roomState = ensureRoomStateMemory();
+  if (threatLevel2 === "high" || threatLevel2 === "critical") {
+    roomState[room.name] = "war";
+    return;
+  }
+  if (threatLevel2 === "medium" || threatLevel2 === "low") {
+    roomState[room.name] = "recovery";
+    return;
+  }
+  const rcl = (_b = (_a = room.controller) == null ? void 0 : _a.level) != null ? _b : 0;
+  if (rcl <= 1) {
+    roomState[room.name] = "bootstrap";
+  } else if (rcl <= 4) {
+    roomState[room.name] = "developing";
+  } else {
+    roomState[room.name] = "mature";
+  }
+}
+function refreshThreatForRoom(room) {
+  const hostiles = room.find(FIND_HOSTILE_CREEPS);
+  const threat = ensureThreatMemory();
+  const existing = threat[room.name];
+  if (hostiles.length === 0) {
+    if (existing && existing.expiresAt > Game.time) {
+      setRoomState(room, existing.level);
+      return;
+    }
+    threat[room.name] = {
+      level: "none",
+      score: 0,
+      hostileCount: 0,
+      attackParts: 0,
+      rangedParts: 0,
+      healParts: 0,
+      workParts: 0,
+      expiresAt: Game.time
+    };
+    setRoomState(room, "none");
+    return;
+  }
+  let score = 0;
+  let attackParts = 0;
+  let rangedParts = 0;
+  let healParts = 0;
+  let workParts = 0;
+  for (const hostile of hostiles) {
+    const hostileScore = scoreHostile(hostile);
+    score += hostileScore.score;
+    attackParts += hostileScore.attackParts;
+    rangedParts += hostileScore.rangedParts;
+    healParts += hostileScore.healParts;
+    workParts += hostileScore.workParts;
+  }
+  const level = threatLevelFromScore(score);
+  threat[room.name] = {
+    level,
+    score,
+    hostileCount: hostiles.length,
+    attackParts,
+    rangedParts,
+    healParts,
+    workParts,
+    expiresAt: Game.time + COLONY_SETTINGS.combat.threatDecayTicks
+  };
+  const requiredSafeModeLevel = COLONY_SETTINGS.combat.safeModeThreatLevel;
+  if (threatLevelRank(level) >= threatLevelRank(requiredSafeModeLevel) && room.controller && !room.controller.safeMode && room.controller.safeModeAvailable > 0 && room.controller.safeModeCooldown === void 0) {
+    const hostileNearCriticalAssets = hostiles.some((hostile) => {
+      const nearSpawn = room.find(FIND_MY_SPAWNS).some((spawn) => hostile.pos.getRangeTo(spawn) <= 3);
+      const nearController = hostile.pos.getRangeTo(room.controller) <= 3;
+      return nearSpawn || nearController;
+    });
+    if (hostileNearCriticalAssets) {
+      room.controller.activateSafeMode();
+    }
+  }
+  setRoomState(room, level);
+}
+function getEmergencySoldierCount(roomName) {
+  var _a;
+  const threat = (_a = Memory.threat) == null ? void 0 : _a[roomName];
+  if (!threat || threat.expiresAt < Game.time) return 0;
+  switch (threat.level) {
+    case "critical":
+      return COLONY_SETTINGS.combat.emergencySoldiersAtCritical;
+    case "high":
+      return COLONY_SETTINGS.combat.emergencySoldiersAtHigh;
+    case "medium":
+      return COLONY_SETTINGS.combat.emergencySoldiersAtMedium;
+    default:
+      return 0;
+  }
+}
+function runThreatManager() {
+  var _a;
+  for (const room of Object.values(Game.rooms)) {
+    if (!((_a = room.controller) == null ? void 0 : _a.my)) continue;
+    refreshThreatForRoom(room);
+  }
+}
+
 // src/colony/spawnPlanner.ts
 function baseDesired() {
   const desired = {};
@@ -313,9 +502,10 @@ function shouldSpawnClaimer(snapshot) {
   return getPendingManualClaimTargets(snapshot.roomName).length > 0;
 }
 function deriveDesiredRoles(snapshot, stage, capabilities) {
-  var _a, _b;
+  var _a, _b, _c, _d;
   const desired = baseDesired();
   const roomSettings = resolveRoomSettings(snapshot.roomName);
+  const roomState = (_b = (_a = Memory.roomState) == null ? void 0 : _a[snapshot.roomName]) != null ? _b : "developing";
   desired.harvester = Math.max(COLONY_SETTINGS.planner.minHarvesters, snapshot.sourceCount);
   desired.hauler = COLONY_SETTINGS.planner.baseHaulers;
   desired.upgrader = COLONY_SETTINGS.planner.baseUpgraders;
@@ -355,10 +545,23 @@ function deriveDesiredRoles(snapshot, stage, capabilities) {
     desired.mineralMiner = COLONY_SETTINGS.minerals.minerCount;
     desired.mineralHauler = COLONY_SETTINGS.minerals.haulerCount;
   }
+  const emergencySoldiers = getEmergencySoldierCount(snapshot.roomName);
+  if (emergencySoldiers > 0) {
+    desired.soldier = Math.max(desired.soldier, emergencySoldiers);
+  }
+  if (roomState === "war") {
+    desired.upgrader = Math.min(desired.upgrader, 1);
+    desired.builder = Math.min(desired.builder, 1);
+    desired.hauler = Math.max(desired.hauler, snapshot.sourceCount + 1);
+    desired.repairer = Math.max(desired.repairer, 2);
+  } else if (roomState === "recovery") {
+    desired.upgrader = Math.min(desired.upgrader, 2);
+    desired.repairer = Math.max(desired.repairer, 1);
+  }
   applyRoleOverrides(desired, COLONY_SETTINGS.roleTargets.default);
-  applyRoleOverrides(desired, (_a = COLONY_SETTINGS.roleTargets.byStage[stage]) != null ? _a : {});
+  applyRoleOverrides(desired, (_c = COLONY_SETTINGS.roleTargets.byStage[stage]) != null ? _c : {});
   applyRoleOverrides(desired, roomSettings.roleTargets);
-  applyRoleOverrides(desired, (_b = roomSettings.roleTargetsByStage[stage]) != null ? _b : {});
+  applyRoleOverrides(desired, (_d = roomSettings.roleTargetsByStage[stage]) != null ? _d : {});
   return desired;
 }
 
@@ -392,7 +595,7 @@ function canExpand(snapshot) {
 }
 function canAttack(snapshot) {
   const roomSettings = resolveRoomSettings(snapshot.roomName);
-  if (!COLONY_SETTINGS.pvp.enabled || roomSettings.disablePvP) return false;
+  if (!COLONY_SETTINGS.combat.offenseEnabled || !COLONY_SETTINGS.pvp.enabled || roomSettings.disablePvP) return false;
   return snapshot.rcl >= COLONY_SETTINGS.stage.offenseMinRcl && snapshot.storageEnergy >= COLONY_SETTINGS.stage.offenseMinStorageEnergy;
 }
 function deriveCapabilities(snapshot, stage) {
@@ -421,6 +624,7 @@ function neighboringRooms(room) {
   return unique2(Object.values(exits));
 }
 function deriveTargetRooms(room, strategy) {
+  var _a;
   const visibleNeighbors = neighboringRooms(room);
   const allowedRemoteNeighbors = visibleNeighbors.filter((name) => isRemoteRoomAllowed(room.name, name));
   const scoutTargetRooms = visibleNeighbors;
@@ -440,6 +644,11 @@ function deriveTargetRooms(room, strategy) {
     if (!targetRoom) return false;
     return targetRoom.find(FIND_HOSTILE_CREEPS).length > 0;
   }) : [];
+  const localThreat = (_a = Memory.threat) == null ? void 0 : _a[room.name];
+  const shouldDefendLocalRoom = COLONY_SETTINGS.combat.defenseEnabled && localThreat !== void 0 && localThreat.expiresAt >= Game.time && localThreat.level !== "none";
+  if (shouldDefendLocalRoom && !attackTargetRooms.includes(room.name)) {
+    attackTargetRooms.unshift(room.name);
+  }
   return {
     ...strategy,
     scoutTargetRooms,
@@ -1050,15 +1259,44 @@ function runConstructionManager() {
 }
 
 // src/managers/defenseManager.ts
+function pickPriorityHostile(tower) {
+  const hostiles = tower.room.find(FIND_HOSTILE_CREEPS);
+  if (hostiles.length === 0) return null;
+  const healers = hostiles.filter((hostile) => hostile.getActiveBodyparts(HEAL) > 0);
+  if (healers.length > 0) {
+    return tower.pos.findClosestByRange(healers);
+  }
+  const ranged = hostiles.filter((hostile) => hostile.getActiveBodyparts(RANGED_ATTACK) > 0);
+  if (ranged.length > 0) {
+    return tower.pos.findClosestByRange(ranged);
+  }
+  const attackers = hostiles.filter((hostile) => hostile.getActiveBodyparts(ATTACK) > 0);
+  if (attackers.length > 0) {
+    return tower.pos.findClosestByRange(attackers);
+  }
+  const workers = hostiles.filter((hostile) => hostile.getActiveBodyparts(WORK) > 0);
+  if (workers.length > 0) {
+    return tower.pos.findClosestByRange(workers);
+  }
+  return tower.pos.findClosestByRange(hostiles);
+}
+function threatLevel(roomName) {
+  var _a;
+  const threat = (_a = Memory.threat) == null ? void 0 : _a[roomName];
+  if (!threat || threat.expiresAt < Game.time) return "none";
+  return threat.level;
+}
 function runDefenseManager() {
   const towers = _.filter(
     Object.values(Game.structures),
     (structure) => structure.structureType === STRUCTURE_TOWER && structure.my
   );
   for (const tower of towers) {
-    const closestHostile = tower.pos.findClosestByRange(FIND_HOSTILE_CREEPS);
-    if (closestHostile) {
-      tower.attack(closestHostile);
+    const roomThreat = threatLevel(tower.room.name);
+    const inCombat = roomThreat !== "none";
+    const hostileTarget = roomThreat === "high" || roomThreat === "critical" ? pickPriorityHostile(tower) : tower.pos.findClosestByRange(FIND_HOSTILE_CREEPS);
+    if (hostileTarget) {
+      tower.attack(hostileTarget);
       continue;
     }
     const wounded = tower.pos.findClosestByRange(FIND_MY_CREEPS, {
@@ -1068,6 +1306,7 @@ function runDefenseManager() {
       tower.heal(wounded);
       continue;
     }
+    if (inCombat) continue;
     const repairTarget = tower.pos.findClosestByRange(FIND_STRUCTURES, {
       filter: (structure) => {
         if (structure.structureType === STRUCTURE_WALL || structure.structureType === STRUCTURE_RAMPART) {
@@ -1214,6 +1453,13 @@ function nextRoleToSpawn(spawn) {
   if (current.length === 0) {
     return "harvester";
   }
+  const emergencySoldiers = getEmergencySoldierCount(spawn.room.name);
+  if (emergencySoldiers > 0) {
+    const soldierCount = current.filter((creep) => creep.memory.role === "soldier").length;
+    if (soldierCount < emergencySoldiers) {
+      return "soldier";
+    }
+  }
   for (const role of ROLE_ORDER) {
     const desired = (_b = strategy.desiredRoles[role]) != null ? _b : 0;
     if (desired <= 0) continue;
@@ -1239,6 +1485,41 @@ function pickBootstrapTargetRoom(homeRoom, targets) {
   }
   return bestTarget;
 }
+function reinforcementNeedForRoom(roomName) {
+  var _a;
+  const threat = (_a = Memory.threat) == null ? void 0 : _a[roomName];
+  if (!threat || threat.expiresAt < Game.time) return 0;
+  return getEmergencySoldierCount(roomName);
+}
+function currentDefendersAssigned(roomName) {
+  return Object.values(Game.creeps).filter((creep) => {
+    if (creep.memory.role !== "soldier") return false;
+    if (creep.memory.homeRoom === roomName) return true;
+    return creep.memory.targetRoom === roomName;
+  }).length;
+}
+function pickReinforcementTarget(homeRoom) {
+  const candidateRooms = Object.values(Game.rooms).filter((room) => {
+    var _a;
+    return ((_a = room.controller) == null ? void 0 : _a.my) && room.name !== homeRoom;
+  });
+  let bestTarget;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const room of candidateRooms) {
+    const need = reinforcementNeedForRoom(room.name);
+    if (need <= 0) continue;
+    const assigned = currentDefendersAssigned(room.name);
+    const deficit = need - assigned;
+    if (deficit <= 0) continue;
+    const distance = Game.map.getRoomLinearDistance(homeRoom, room.name);
+    const score = deficit * 100 - distance * 10;
+    if (score > bestScore) {
+      bestScore = score;
+      bestTarget = room.name;
+    }
+  }
+  return bestTarget;
+}
 function runSpawnManager() {
   var _a;
   const spawns = Object.values(Game.spawns);
@@ -1250,6 +1531,9 @@ function runSpawnManager() {
     if (!strategy) continue;
     const bootstrapTargetRoom = role === "bootstrapper" ? pickBootstrapTargetRoom(spawn.room.name, strategy.bootstrapTargetRooms) : void 0;
     if (role === "bootstrapper" && !bootstrapTargetRoom) continue;
+    const localEmergency = getEmergencySoldierCount(spawn.room.name);
+    const reinforcementTargetRoom = role === "soldier" && localEmergency === 0 ? pickReinforcementTarget(spawn.room.name) : void 0;
+    const targetRoom = bootstrapTargetRoom != null ? bootstrapTargetRoom : reinforcementTargetRoom;
     const energyBudget = spawn.room.energyAvailable;
     const body = buildBody(role, energyBudget);
     if (!body) continue;
@@ -1259,9 +1543,39 @@ function runSpawnManager() {
         role,
         homeRoom: spawn.room.name,
         working: false,
-        targetRoom: bootstrapTargetRoom
+        targetRoom
       }
     });
+  }
+}
+
+// src/managers/telemetryManager.ts
+function summarizeThreat(roomName) {
+  var _a;
+  const threat = (_a = Memory.threat) == null ? void 0 : _a[roomName];
+  if (!threat || threat.expiresAt < Game.time) return "none";
+  return `${threat.level}:${threat.score}`;
+}
+function runTelemetryManager() {
+  var _a, _b, _c, _d, _e;
+  if (!COLONY_SETTINGS.telemetry.enabled) return;
+  if (Game.time % COLONY_SETTINGS.telemetry.interval !== 0) return;
+  const ownedRooms = Object.values(Game.rooms).filter((room) => {
+    var _a2;
+    return (_a2 = room.controller) == null ? void 0 : _a2.my;
+  });
+  for (const room of ownedRooms) {
+    const state = (_b = (_a = Memory.roomState) == null ? void 0 : _a[room.name]) != null ? _b : "unknown";
+    const threat = summarizeThreat(room.name);
+    const strategy = (_c = Memory.strategy) == null ? void 0 : _c[room.name];
+    const claim = (_d = strategy == null ? void 0 : strategy.claimTargetRooms[0]) != null ? _d : "-";
+    const bootstrap = (_e = strategy == null ? void 0 : strategy.bootstrapTargetRooms.join(",")) != null ? _e : "-";
+    const soldiers = Object.values(Game.creeps).filter(
+      (creep) => creep.memory.homeRoom === room.name && creep.memory.role === "soldier"
+    ).length;
+    console.log(
+      `[telemetry][${room.name}] state=${state} threat=${threat} soldiers=${soldiers} claim=${claim} bootstrap=${bootstrap}`
+    );
   }
 }
 
@@ -1509,7 +1823,17 @@ function claimRoomController(creep, roomName) {
   return result === OK;
 }
 function attackInRoom(creep, roomName) {
-  if (!isAttackAllowed(creep.memory.homeRoom, roomName)) return false;
+  var _a;
+  const targetRoom = Game.rooms[roomName];
+  const defendingOwnedRoom = Boolean((_a = targetRoom == null ? void 0 : targetRoom.controller) == null ? void 0 : _a.my);
+  if (defendingOwnedRoom) {
+    if (!COLONY_SETTINGS.combat.defenseEnabled) return false;
+    if (!COLONY_SETTINGS.combat.defendEvenIfOffenseDisabled && !isAttackAllowed(creep.memory.homeRoom, roomName)) {
+      return false;
+    }
+  } else if (!isAttackAllowed(creep.memory.homeRoom, roomName)) {
+    return false;
+  }
   if (creep.room.name !== roomName) {
     moveToRoomCenter(creep, roomName);
     return true;
@@ -1750,6 +2074,9 @@ function runScout(creep) {
 // src/roles/soldier.ts
 function runSoldier(creep) {
   var _a, _b, _c;
+  if (creep.memory.targetRoom) {
+    if (attackInRoom(creep, creep.memory.targetRoom)) return;
+  }
   const targets = (_c = (_b = (_a = Memory.strategy) == null ? void 0 : _a[creep.memory.homeRoom]) == null ? void 0 : _b.attackTargetRooms) != null ? _c : [];
   if (targets.length === 0) return;
   const targetRoom = targets[Game.time % targets.length];
@@ -1830,11 +2157,13 @@ function runRole(creep) {
 // src/main.ts
 var loop = () => {
   cleanupMemory();
+  runThreatManager();
   runColonyManager();
   runSpawnManager();
   runConstructionManager();
   runLinkManager();
   runDefenseManager();
+  runTelemetryManager();
   for (const creep of Object.values(Game.creeps)) {
     runRole(creep);
   }

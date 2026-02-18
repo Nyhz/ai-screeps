@@ -44,6 +44,16 @@ export function deriveTargetRooms(room: Room, strategy: ColonyStrategy): ColonyS
       })
     : [];
 
+  const localThreat = Memory.threat?.[room.name];
+  const shouldDefendLocalRoom =
+    COLONY_SETTINGS.combat.defenseEnabled &&
+    localThreat !== undefined &&
+    localThreat.expiresAt >= Game.time &&
+    localThreat.level !== "none";
+  if (shouldDefendLocalRoom && !attackTargetRooms.includes(room.name)) {
+    attackTargetRooms.unshift(room.name);
+  }
+
   return {
     ...strategy,
     scoutTargetRooms,

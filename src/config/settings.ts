@@ -26,6 +26,20 @@ export const COLONY_SETTINGS = {
     enabled: false,
     noAttackRooms: [] as string[]
   },
+  combat: {
+    offenseEnabled: false,
+    defenseEnabled: true,
+    defendEvenIfOffenseDisabled: true,
+    threatDecayTicks: 30,
+    lowThreatScore: 20,
+    mediumThreatScore: 60,
+    highThreatScore: 120,
+    criticalThreatScore: 220,
+    emergencySoldiersAtMedium: 1,
+    emergencySoldiersAtHigh: 2,
+    emergencySoldiersAtCritical: 4,
+    safeModeThreatLevel: "critical" as "none" | "low" | "medium" | "high" | "critical"
+  },
   stage: {
     towersMinRcl: 3,
     wallsMinRcl: 4,
@@ -110,6 +124,10 @@ export const COLONY_SETTINGS = {
     receiverMinFreeCapacity: 200,
     controllerLinkTargetLevel: 600
   },
+  telemetry: {
+    enabled: true,
+    interval: 50
+  },
   layout: {
     scanMin: 6,
     scanMax: 43,
@@ -164,7 +182,8 @@ export function resolveRoomSettings(roomName: string): ResolvedRoomControlSettin
 
 export function isAttackAllowed(homeRoom: string, targetRoom: string): boolean {
   const roomSettings = resolveRoomSettings(homeRoom);
-  if (!COLONY_SETTINGS.pvp.enabled || roomSettings.disablePvP) return false;
+  const offenseEnabled = COLONY_SETTINGS.combat.offenseEnabled && COLONY_SETTINGS.pvp.enabled;
+  if (!offenseEnabled || roomSettings.disablePvP) return false;
   return !roomSettings.noAttackRooms.includes(targetRoom);
 }
 

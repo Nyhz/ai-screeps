@@ -24,7 +24,7 @@ function canExpand(snapshot: RoomSnapshot): boolean {
 
 function canAttack(snapshot: RoomSnapshot): boolean {
   const roomSettings = resolveRoomSettings(snapshot.roomName);
-  if (!COLONY_SETTINGS.pvp.enabled || roomSettings.disablePvP) return false;
+  if (!COLONY_SETTINGS.combat.offenseEnabled || !COLONY_SETTINGS.pvp.enabled || roomSettings.disablePvP) return false;
   return (
     snapshot.rcl >= COLONY_SETTINGS.stage.offenseMinRcl &&
     snapshot.storageEnergy >= COLONY_SETTINGS.stage.offenseMinStorageEnergy

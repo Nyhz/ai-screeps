@@ -1,6 +1,7 @@
 import type { CapabilityFlags, ColonyStage } from "../config/colonyStages";
 import { COLONY_SETTINGS, getBootstrapTargetRooms, getPendingManualClaimTargets, resolveRoomSettings } from "../config/settings";
 import { ROLE_ORDER, type RoleName } from "../config/roles";
+import { getEmergencySoldierCount } from "../managers/threatManager";
 import type { RoomSnapshot } from "./types";
 
 function baseDesired(): Record<RoleName, number> {
@@ -44,6 +45,7 @@ export function deriveDesiredRoles(
 ): Record<RoleName, number> {
   const desired = baseDesired();
   const roomSettings = resolveRoomSettings(snapshot.roomName);
+  const roomState = Memory.roomState?.[snapshot.roomName] ?? "developing";
 
   // Always keep a minimum survival workforce so a room can recover from wipes.
   desired.harvester = Math.max(COLONY_SETTINGS.planner.minHarvesters, snapshot.sourceCount);
@@ -97,6 +99,21 @@ export function deriveDesiredRoles(
   if (shouldRunMineralPipeline(snapshot)) {
     desired.mineralMiner = COLONY_SETTINGS.minerals.minerCount;
     desired.mineralHauler = COLONY_SETTINGS.minerals.haulerCount;
+  }
+
+  const emergencySoldiers = getEmergencySoldierCount(snapshot.roomName);
+  if (emergencySoldiers > 0) {
+    desired.soldier = Math.max(desired.soldier, emergencySoldiers);
+  }
+
+  if (roomState === "war") {
+    desired.upgrader = Math.min(desired.upgrader, 1);
+    desired.builder = Math.min(desired.builder, 1);
+    desired.hauler = Math.max(desired.hauler, snapshot.sourceCount + 1);
+    desired.repairer = Math.max(desired.repairer, 2);
+  } else if (roomState === "recovery") {
+    desired.upgrader = Math.min(desired.upgrader, 2);
+    desired.repairer = Math.max(desired.repairer, 1);
   }
 
   applyRoleOverrides(desired, COLONY_SETTINGS.roleTargets.default);

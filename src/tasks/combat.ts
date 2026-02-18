@@ -1,5 +1,5 @@
 import { moveToRoomCenter, moveToTarget } from "./movement";
-import { isAttackAllowed } from "../config/settings";
+import { COLONY_SETTINGS, isAttackAllowed } from "../config/settings";
 
 export function reserveRoomController(creep: Creep, roomName: string): boolean {
   if (creep.room.name !== roomName) {
@@ -38,7 +38,17 @@ export function claimRoomController(creep: Creep, roomName: string): boolean {
 }
 
 export function attackInRoom(creep: Creep, roomName: string): boolean {
-  if (!isAttackAllowed(creep.memory.homeRoom, roomName)) return false;
+  const targetRoom = Game.rooms[roomName];
+  const defendingOwnedRoom = Boolean(targetRoom?.controller?.my);
+
+  if (defendingOwnedRoom) {
+    if (!COLONY_SETTINGS.combat.defenseEnabled) return false;
+    if (!COLONY_SETTINGS.combat.defendEvenIfOffenseDisabled && !isAttackAllowed(creep.memory.homeRoom, roomName)) {
+      return false;
+    }
+  } else if (!isAttackAllowed(creep.memory.homeRoom, roomName)) {
+    return false;
+  }
 
   if (creep.room.name !== roomName) {
     moveToRoomCenter(creep, roomName);

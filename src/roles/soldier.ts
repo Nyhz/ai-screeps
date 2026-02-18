@@ -1,6 +1,10 @@
 import { attackInRoom } from "../tasks/combat";
 
 export function runSoldier(creep: Creep): void {
+  if (creep.memory.targetRoom) {
+    if (attackInRoom(creep, creep.memory.targetRoom)) return;
+  }
+
   const targets = Memory.strategy?.[creep.memory.homeRoom]?.attackTargetRooms ?? [];
   if (targets.length === 0) return;
 

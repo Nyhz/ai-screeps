@@ -1,5 +1,6 @@
 import { ROLE_BODIES } from "../config/bodyPlans";
 import { ROLE_ORDER, type RoleName } from "../config/roles";
+import { getEmergencySoldierCount } from "./threatManager";
 import { bodyCost } from "../utils";
 
 function buildBody(role: RoleName, energyBudget: number): BodyPartConstant[] | null {
@@ -30,6 +31,14 @@ function nextRoleToSpawn(spawn: StructureSpawn): RoleName | null {
   const current = Object.values(Game.creeps).filter((creep) => creep.memory.homeRoom === spawn.room.name);
   if (current.length === 0) {
     return "harvester";
+  }
+
+  const emergencySoldiers = getEmergencySoldierCount(spawn.room.name);
+  if (emergencySoldiers > 0) {
+    const soldierCount = current.filter((creep) => creep.memory.role === "soldier").length;
+    if (soldierCount < emergencySoldiers) {
+      return "soldier";
+    }
   }
 
   for (const role of ROLE_ORDER) {
@@ -65,6 +74,44 @@ function pickBootstrapTargetRoom(homeRoom: string, targets: string[]): string | 
   return bestTarget;
 }
 
+function reinforcementNeedForRoom(roomName: string): number {
+  const threat = Memory.threat?.[roomName];
+  if (!threat || threat.expiresAt < Game.time) return 0;
+  return getEmergencySoldierCount(roomName);
+}
+
+function currentDefendersAssigned(roomName: string): number {
+  return Object.values(Game.creeps).filter((creep) => {
+    if (creep.memory.role !== "soldier") return false;
+    if (creep.memory.homeRoom === roomName) return true;
+    return creep.memory.targetRoom === roomName;
+  }).length;
+}
+
+function pickReinforcementTarget(homeRoom: string): string | undefined {
+  const candidateRooms = Object.values(Game.rooms).filter((room) => room.controller?.my && room.name !== homeRoom);
+  let bestTarget: string | undefined;
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (const room of candidateRooms) {
+    const need = reinforcementNeedForRoom(room.name);
+    if (need <= 0) continue;
+
+    const assigned = currentDefendersAssigned(room.name);
+    const deficit = need - assigned;
+    if (deficit <= 0) continue;
+
+    const distance = Game.map.getRoomLinearDistance(homeRoom, room.name);
+    const score = deficit * 100 - distance * 10;
+    if (score > bestScore) {
+      bestScore = score;
+      bestTarget = room.name;
+    }
+  }
+
+  return bestTarget;
+}
+
 export function runSpawnManager(): void {
   const spawns = Object.values(Game.spawns);
   for (const spawn of spawns) {
@@ -79,6 +126,12 @@ export function runSpawnManager(): void {
       role === "bootstrapper" ? pickBootstrapTargetRoom(spawn.room.name, strategy.bootstrapTargetRooms) : undefined;
     if (role === "bootstrapper" && !bootstrapTargetRoom) continue;
 
+    const localEmergency = getEmergencySoldierCount(spawn.room.name);
+    const reinforcementTargetRoom =
+      role === "soldier" && localEmergency === 0 ? pickReinforcementTarget(spawn.room.name) : undefined;
+
+    const targetRoom = bootstrapTargetRoom ?? reinforcementTargetRoom;
+
     const energyBudget = spawn.room.energyAvailable;
     const body = buildBody(role, energyBudget);
     if (!body) continue;
@@ -89,7 +142,7 @@ export function runSpawnManager(): void {
         role,
         homeRoom: spawn.room.name,
         working: false,
-        targetRoom: bootstrapTargetRoom
+        targetRoom
       }
     });
   }
