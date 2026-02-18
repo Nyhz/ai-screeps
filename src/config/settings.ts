@@ -51,7 +51,7 @@ export const COLONY_SETTINGS = {
   },
   planner: {
     minHarvesters: 2,
-    baseHaulers: 1,
+    baseHaulers: 2,
     haulersPerSource: 1,
     baseUpgraders: 1,
     buildersWhenSitesExist: 2,
@@ -74,13 +74,17 @@ export const COLONY_SETTINGS = {
   spawn: {
     reserveEnergyRatio: 0.3
   },
+  upgrading: {
+    pauseWhenStorageEnergyBelow: 10000,
+    pauseWhenNoStorageFillRatio: 0.7
+  },
   construction: {
     runInterval: 37,
     maxRoomConstructionSites: 10,
     autoPlaceSpawnInClaimedRooms: true,
     sourceExtensionsPerSource: 2,
-    sourceExtensionsMinRcl: 3,
-    requireEnergyCapForSourceExtensions: true,
+    sourceExtensionsMinRcl: 2,
+    requireEnergyCapForSourceExtensions: false,
     sourceExtensionMaxAvgFillRatioToExpand: 0.4
   },
   defense: {
@@ -272,4 +276,19 @@ export function getWallTargetHits(rcl: number): number {
   const target = COLONY_SETTINGS.walls.targetHitsByRcl[rcl];
   if (target) return target;
   return rcl >= 8 ? COLONY_SETTINGS.walls.targetHitsByRcl[8] : COLONY_SETTINGS.walls.targetHitsByRcl[1];
+}
+
+export function isUpgradingPaused(room: Room): boolean {
+  const fillRatio = Math.max(0, Math.min(1, COLONY_SETTINGS.upgrading.pauseWhenNoStorageFillRatio));
+  const requiredEnergy = Math.ceil(room.energyCapacityAvailable * fillRatio);
+
+  const storageThreshold = Math.max(0, COLONY_SETTINGS.upgrading.pauseWhenStorageEnergyBelow);
+  if (room.storage && storageThreshold > 0) {
+    const storageEnergy = room.storage.store.getUsedCapacity(RESOURCE_ENERGY);
+    if (storageEnergy >= storageThreshold) return false;
+    // Fallback for low-capacity/early rooms with storage: allow upgrading when room is well filled.
+    return room.energyAvailable < requiredEnergy;
+  }
+
+  return room.energyAvailable < requiredEnergy;
 }

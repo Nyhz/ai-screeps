@@ -76,6 +76,12 @@ function shouldBypassEnergyGate(spawn: StructureSpawn, role: RoleName): boolean 
   return false;
 }
 
+function minimumEnergyForRole(spawn: StructureSpawn, role: RoleName): number {
+  if (role !== "miner") return 0;
+  // 550 energy allows miner body to reach 5 WORK for full source saturation.
+  return Math.min(spawn.room.energyCapacityAvailable, 550);
+}
+
 function pickBootstrapTargetRoom(homeRoom: string, targets: string[]): string | undefined {
   if (targets.length === 0) return undefined;
 
@@ -157,8 +163,9 @@ export function runSpawnManager(): void {
     const reserveRatio = Math.max(0, Math.min(0.95, COLONY_SETTINGS.spawn.reserveEnergyRatio));
     const minFillRatio = 1 - reserveRatio;
     const requiredEnergy = Math.ceil(spawn.room.energyCapacityAvailable * minFillRatio);
+    const roleMinEnergy = minimumEnergyForRole(spawn, role);
     const bypassEnergyGate = shouldBypassEnergyGate(spawn, role);
-    if (!bypassEnergyGate && spawn.room.energyAvailable < requiredEnergy) continue;
+    if (!bypassEnergyGate && spawn.room.energyAvailable < Math.max(requiredEnergy, roleMinEnergy)) continue;
 
     const energyBudget = spawn.room.energyAvailable;
     const body = buildBody(role, energyBudget);

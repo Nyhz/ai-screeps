@@ -43,6 +43,8 @@ COLONY_SETTINGS
 +- combat         -> Adaptive defense/offense behavior and threat thresholds
 +- stage          -> Unlock thresholds for towers/walls/remote/expansion/offense
 +- planner        -> Base spawn logic knobs
++- spawn          -> Spawn energy reserve gate
++- upgrading      -> Controller upgrade pause thresholds
 +- construction   -> How often and how much to place
 +- defense        -> Tower repair limits
 +- walls          -> Wall/rampart fortification targets by RCL
@@ -117,7 +119,7 @@ If two settings define the same role, the later item in the list wins.
 | Variable | Type | Default | Possible values | Effect |
 |---|---|---:|---|---|
 | `planner.minHarvesters` | `number` | `2` | `0+` | Lower bound for harvester count (still compared with source count). |
-| `planner.baseHaulers` | `number` | `1` | `0+` | Baseline hauler count before stage-specific adjustments. |
+| `planner.baseHaulers` | `number` | `2` | `0+` | Baseline hauler count before stage-specific adjustments. |
 | `planner.haulersPerSource` | `number` | `1` | `0+` | Hauler scaling multiplier per source after bootstrap. Increase if source depots are backing up. |
 | `planner.baseUpgraders` | `number` | `1` | `0+` | Baseline upgrader count in bootstrap logic. |
 | `planner.buildersWhenSitesExist` | `number` | `2` | `0+` | Builder count when construction sites exist. |
@@ -143,9 +145,22 @@ If two settings define the same role, the later item in the list wins.
 | `construction.maxRoomConstructionSites` | `number` | `10` | `1+` | If room has more than this many sites, new sites are not placed. |
 | `construction.autoPlaceSpawnInClaimedRooms` | `boolean` | `true` | `true`, `false` | If enabled, newly claimed owned rooms automatically place an initial spawn construction site at the planned anchor. |
 | `construction.sourceExtensionsPerSource` | `number` | `2` | `0+` | Target count of source-side extension depots per source. |
-| `construction.sourceExtensionsMinRcl` | `number` | `3` | `1-8` | Minimum RCL required before source-side extension depots are considered. |
-| `construction.requireEnergyCapForSourceExtensions` | `boolean` | `true` | `true`, `false` | If `true`, source-side extension expansion happens only when room energy is capped. |
+| `construction.sourceExtensionsMinRcl` | `number` | `2` | `1-8` | Minimum RCL required before source-side extension depots are considered. |
+| `construction.requireEnergyCapForSourceExtensions` | `boolean` | `false` | `true`, `false` | If `true`, source-side extension expansion happens only when room energy is capped. |
 | `construction.sourceExtensionMaxAvgFillRatioToExpand` | `number` | `0.4` | `0.0-1.0` | Add more source-side extensions only if existing ones are draining fast enough (avg fill ratio below threshold). |
+
+### `spawn`
+
+| Variable | Type | Default | Possible values | Effect |
+|---|---|---:|---|---|
+| `spawn.reserveEnergyRatio` | `number` | `0.3` | `0.0-0.95` recommended | Reserves this fraction of total room energy from routine spawning. Example: `0.3` means normal spawns start at ~70% fill. |
+
+### `upgrading`
+
+| Variable | Type | Default | Possible values | Effect |
+|---|---|---:|---|---|
+| `upgrading.pauseWhenStorageEnergyBelow` | `number` | `10000` | `0+` | If storage exists and stored energy is below this, controller upgrading is paused and upgrader target becomes `0`. |
+| `upgrading.pauseWhenNoStorageFillRatio` | `number` | `0.7` | `0.0-1.0` | Fallback gate before storage exists: upgrading pauses unless room energy fill reaches this ratio. |
 
 ### `defense`
 
@@ -353,13 +368,13 @@ Recommended starting values:
 ```ts
 planner: {
   ...COLONY_SETTINGS.planner,
-  haulersPerSource: 2
+  haulersPerSource: 1
 },
 construction: {
   ...COLONY_SETTINGS.construction,
   sourceExtensionsPerSource: 2,
-  sourceExtensionsMinRcl: 3,
-  requireEnergyCapForSourceExtensions: true,
+  sourceExtensionsMinRcl: 2,
+  requireEnergyCapForSourceExtensions: false,
   sourceExtensionMaxAvgFillRatioToExpand: 0.4
 },
 logistics: {

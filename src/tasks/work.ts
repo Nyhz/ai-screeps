@@ -1,8 +1,10 @@
+import { isUpgradingPaused } from "../config/settings";
 import { moveToTarget } from "./movement";
 
 export function upgradeController(creep: Creep): boolean {
   const controller = creep.room.controller;
   if (!controller) return false;
+  if (isUpgradingPaused(creep.room)) return false;
 
   const result = creep.upgradeController(controller);
   if (result === ERR_NOT_IN_RANGE) {

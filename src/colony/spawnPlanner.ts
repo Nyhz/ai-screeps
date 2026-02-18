@@ -1,5 +1,11 @@
 import type { CapabilityFlags, ColonyStage } from "../config/colonyStages";
-import { COLONY_SETTINGS, getBootstrapTargetRooms, getPendingManualClaimTargets, resolveRoomSettings } from "../config/settings";
+import {
+  COLONY_SETTINGS,
+  getBootstrapTargetRooms,
+  getPendingManualClaimTargets,
+  isUpgradingPaused,
+  resolveRoomSettings
+} from "../config/settings";
 import { ROLE_ORDER, type RoleName } from "../config/roles";
 import { getEmergencySoldierCount } from "../managers/threatManager";
 import type { RoomSnapshot } from "./types";
@@ -57,6 +63,7 @@ export function deriveDesiredRoles(
       : COLONY_SETTINGS.planner.buildersWhenNoSites;
 
   if (stage !== "bootstrap") {
+    desired.harvester = Math.min(desired.harvester, 1);
     desired.miner = snapshot.sourceCount;
     desired.hauler = Math.max(
       desired.hauler,
@@ -114,6 +121,11 @@ export function deriveDesiredRoles(
   } else if (roomState === "recovery") {
     desired.upgrader = Math.min(desired.upgrader, 2);
     desired.repairer = Math.max(desired.repairer, 1);
+  }
+
+  const room = Game.rooms[snapshot.roomName];
+  if (room && isUpgradingPaused(room)) {
+    desired.upgrader = 0;
   }
 
   applyRoleOverrides(desired, COLONY_SETTINGS.roleTargets.default);

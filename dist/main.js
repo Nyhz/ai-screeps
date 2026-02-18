@@ -109,7 +109,7 @@ var COLONY_SETTINGS = {
   },
   planner: {
     minHarvesters: 2,
-    baseHaulers: 1,
+    baseHaulers: 2,
     haulersPerSource: 1,
     baseUpgraders: 1,
     buildersWhenSitesExist: 2,
@@ -132,13 +132,17 @@ var COLONY_SETTINGS = {
   spawn: {
     reserveEnergyRatio: 0.3
   },
+  upgrading: {
+    pauseWhenStorageEnergyBelow: 1e4,
+    pauseWhenNoStorageFillRatio: 0.7
+  },
   construction: {
     runInterval: 37,
     maxRoomConstructionSites: 10,
     autoPlaceSpawnInClaimedRooms: true,
     sourceExtensionsPerSource: 2,
-    sourceExtensionsMinRcl: 3,
-    requireEnergyCapForSourceExtensions: true,
+    sourceExtensionsMinRcl: 2,
+    requireEnergyCapForSourceExtensions: false,
     sourceExtensionMaxAvgFillRatioToExpand: 0.4
   },
   defense: {
@@ -304,6 +308,17 @@ function getWallTargetHits(rcl) {
   const target = COLONY_SETTINGS.walls.targetHitsByRcl[rcl];
   if (target) return target;
   return rcl >= 8 ? COLONY_SETTINGS.walls.targetHitsByRcl[8] : COLONY_SETTINGS.walls.targetHitsByRcl[1];
+}
+function isUpgradingPaused(room) {
+  const fillRatio = Math.max(0, Math.min(1, COLONY_SETTINGS.upgrading.pauseWhenNoStorageFillRatio));
+  const requiredEnergy = Math.ceil(room.energyCapacityAvailable * fillRatio);
+  const storageThreshold = Math.max(0, COLONY_SETTINGS.upgrading.pauseWhenStorageEnergyBelow);
+  if (room.storage && storageThreshold > 0) {
+    const storageEnergy = room.storage.store.getUsedCapacity(RESOURCE_ENERGY);
+    if (storageEnergy >= storageThreshold) return false;
+    return room.energyAvailable < requiredEnergy;
+  }
+  return room.energyAvailable < requiredEnergy;
 }
 
 // src/managers/threatManager.ts
@@ -514,6 +529,7 @@ function deriveDesiredRoles(snapshot, stage, capabilities) {
   desired.upgrader = COLONY_SETTINGS.planner.baseUpgraders;
   desired.builder = snapshot.constructionSiteCount > 0 ? COLONY_SETTINGS.planner.buildersWhenSitesExist : COLONY_SETTINGS.planner.buildersWhenNoSites;
   if (stage !== "bootstrap") {
+    desired.harvester = Math.min(desired.harvester, 1);
     desired.miner = snapshot.sourceCount;
     desired.hauler = Math.max(
       desired.hauler,
@@ -560,6 +576,10 @@ function deriveDesiredRoles(snapshot, stage, capabilities) {
   } else if (roomState === "recovery") {
     desired.upgrader = Math.min(desired.upgrader, 2);
     desired.repairer = Math.max(desired.repairer, 1);
+  }
+  const room = Game.rooms[snapshot.roomName];
+  if (room && isUpgradingPaused(room)) {
+    desired.upgrader = 0;
   }
   applyRoleOverrides(desired, COLONY_SETTINGS.roleTargets.default);
   applyRoleOverrides(desired, (_c = COLONY_SETTINGS.roleTargets.byStage[stage]) != null ? _c : {});
@@ -1242,8 +1262,8 @@ function runConstructionManager() {
         room.createConstructionSite(anchor.x, anchor.y, STRUCTURE_SPAWN);
       }
     }
-    placeCoreExtensions(room, anchor);
     placeSourceExtensions(room, anchor);
+    placeCoreExtensions(room, anchor);
     placeSourceContainers(room, anchor);
     placeCoreLogistics(room, anchor);
     placeLabCluster(room, anchor);
@@ -1398,7 +1418,7 @@ function runLinkManager() {
 var ROLE_BODIES = {
   harvester: { min: [WORK, CARRY, MOVE], segment: [WORK, CARRY, MOVE], maxSegments: 6 },
   hauler: { min: [CARRY, CARRY, MOVE], segment: [CARRY, CARRY, MOVE], maxSegments: 8 },
-  miner: { min: [WORK, WORK, CARRY, MOVE], segment: [WORK, CARRY, MOVE], maxSegments: 5 },
+  miner: { min: [WORK, WORK, CARRY, MOVE], segment: [WORK, WORK, MOVE], maxSegments: 4 },
   mineralMiner: { min: [WORK, WORK, CARRY, MOVE], segment: [WORK, WORK, MOVE], maxSegments: 4 },
   mineralHauler: { min: [CARRY, CARRY, MOVE], segment: [CARRY, CARRY, MOVE], maxSegments: 8 },
   upgrader: { min: [WORK, CARRY, MOVE], segment: [WORK, CARRY, MOVE], maxSegments: 8 },
@@ -1489,6 +1509,10 @@ function shouldBypassEnergyGate(spawn, role) {
   }
   return false;
 }
+function minimumEnergyForRole(spawn, role) {
+  if (role !== "miner") return 0;
+  return Math.min(spawn.room.energyCapacityAvailable, 550);
+}
 function pickBootstrapTargetRoom(homeRoom, targets) {
   if (targets.length === 0) return void 0;
   let bestTarget;
@@ -1556,8 +1580,9 @@ function runSpawnManager() {
     const reserveRatio = Math.max(0, Math.min(0.95, COLONY_SETTINGS.spawn.reserveEnergyRatio));
     const minFillRatio = 1 - reserveRatio;
     const requiredEnergy = Math.ceil(spawn.room.energyCapacityAvailable * minFillRatio);
+    const roleMinEnergy = minimumEnergyForRole(spawn, role);
     const bypassEnergyGate = shouldBypassEnergyGate(spawn, role);
-    if (!bypassEnergyGate && spawn.room.energyAvailable < requiredEnergy) continue;
+    if (!bypassEnergyGate && spawn.room.energyAvailable < Math.max(requiredEnergy, roleMinEnergy)) continue;
     const energyBudget = spawn.room.energyAvailable;
     const body = buildBody(role, energyBudget);
     if (!body) continue;
@@ -1607,6 +1632,7 @@ function runTelemetryManager() {
 function upgradeController(creep) {
   const controller = creep.room.controller;
   if (!controller) return false;
+  if (isUpgradingPaused(creep.room)) return false;
   const result = creep.upgradeController(controller);
   if (result === ERR_NOT_IN_RANGE) {
     moveToTarget(creep, controller);

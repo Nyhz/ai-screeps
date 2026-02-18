@@ -444,8 +444,8 @@ export function runConstructionManager(): void {
       }
     }
 
-    placeCoreExtensions(room, anchor);
     placeSourceExtensions(room, anchor);
+    placeCoreExtensions(room, anchor);
     placeSourceContainers(room, anchor);
     placeCoreLogistics(room, anchor);
     placeLabCluster(room, anchor);
