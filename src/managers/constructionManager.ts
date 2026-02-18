@@ -90,6 +90,20 @@ function extensionBuiltAndSiteCount(room: Room): number {
   return built + sites;
 }
 
+function sourceExtensionBuiltAndSiteCount(room: Room): number {
+  const built = room.find(FIND_MY_STRUCTURES, {
+    filter: (structure: Structure) => isSourceExtensionPosition(room, structure)
+  }).length;
+  const sites = room.find(FIND_MY_CONSTRUCTION_SITES, {
+    filter: (site: ConstructionSite) => {
+      if (site.structureType !== STRUCTURE_EXTENSION) return false;
+      const sources = room.find(FIND_SOURCES);
+      return sources.some((source) => site.pos.getRangeTo(source) <= 2);
+    }
+  }).length;
+  return built + sites;
+}
+
 function maxExtensions(room: Room): number {
   return CONTROLLER_STRUCTURES[STRUCTURE_EXTENSION][room.controller?.level ?? 0] ?? 0;
 }
@@ -111,15 +125,59 @@ function structureRemainingCapacity(room: Room, structureType: BuildableStructur
   return Math.max(0, max - used);
 }
 
+function isFreeBuildTile(room: Room, x: number, y: number): boolean {
+  if (x < 1 || x > 48 || y < 1 || y > 48) return false;
+  if (room.getTerrain().get(x, y) === TERRAIN_MASK_WALL) return false;
+  if (room.lookForAt(LOOK_STRUCTURES, x, y).length > 0) return false;
+  if (room.lookForAt(LOOK_CONSTRUCTION_SITES, x, y).length > 0) return false;
+  return true;
+}
+
+function hasPendingSourceExtensionCandidates(room: Room, anchor: RoomPosition): boolean {
+  const perSource = Math.max(0, COLONY_SETTINGS.construction.sourceExtensionsPerSource);
+  if (perSource === 0) return false;
+
+  const sources = room.find(FIND_SOURCES);
+  for (const source of sources) {
+    const existing = source.pos.findInRange(FIND_MY_STRUCTURES, 2, {
+      filter: (structure: Structure) => structure.structureType === STRUCTURE_EXTENSION
+    }).length;
+    const pending = source.pos.findInRange(FIND_MY_CONSTRUCTION_SITES, 2, {
+      filter: (site: ConstructionSite) => site.structureType === STRUCTURE_EXTENSION
+    }).length;
+
+    if (existing + pending >= perSource) continue;
+
+    const candidates = extensionCandidatesNearSource(room, anchor, source);
+    if (candidates.some(([x, y]) => isFreeBuildTile(room, x, y))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function sourceExtensionTargetCount(room: Room): number {
+  const perSource = Math.max(0, COLONY_SETTINGS.construction.sourceExtensionsPerSource);
+  if (perSource === 0) return 0;
+  return room.find(FIND_SOURCES).length * perSource;
+}
+
 function placeCoreExtensions(room: Room, anchor: RoomPosition): void {
   const max = maxExtensions(room);
   if (max === 0) return;
 
+  const sourceTarget = Math.min(max, sourceExtensionTargetCount(room));
+  const sourcePlaced = sourceExtensionBuiltAndSiteCount(room);
+  const sourceCanStillGrow = shouldPlaceSourceExtensions(room) && hasPendingSourceExtensionCandidates(room, anchor);
+  const reservedForSources = sourceCanStillGrow ? sourceTarget : sourcePlaced;
+  const coreCap = Math.max(0, max - reservedForSources);
+
   let used = extensionBuiltAndSiteCount(room);
-  if (used >= max) return;
+  if (used >= coreCap) return;
 
   for (const [dx, dy] of CORE_EXTENSION_OFFSETS) {
-    if (used >= max) break;
+    if (used >= coreCap) break;
     if (CORE_RESERVED_OFFSETS.has(`${dx},${dy}`)) continue;
 
     placeIfFree(room, anchor.x + dx, anchor.y + dy, STRUCTURE_EXTENSION);
