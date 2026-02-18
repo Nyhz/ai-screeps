@@ -43,6 +43,7 @@ export const COLONY_SETTINGS = {
   stage: {
     towersMinRcl: 3,
     wallsMinRcl: 4,
+    remoteMiningEnabled: false,
     remoteMiningMinRcl: 3,
     remoteMiningMinEnergyCapacity: 800,
     expansionMinRcl: 4,

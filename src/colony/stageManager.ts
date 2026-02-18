@@ -37,6 +37,7 @@ export function deriveCapabilities(snapshot: RoomSnapshot, stage: ColonyStage): 
     allowTowers: snapshot.rcl >= COLONY_SETTINGS.stage.towersMinRcl,
     allowWalls: snapshot.rcl >= COLONY_SETTINGS.stage.wallsMinRcl,
     allowRemoteMining:
+      COLONY_SETTINGS.stage.remoteMiningEnabled &&
       snapshot.rcl >= COLONY_SETTINGS.stage.remoteMiningMinRcl &&
       snapshot.energyCapacityAvailable >= COLONY_SETTINGS.stage.remoteMiningMinEnergyCapacity,
     allowExpansion: canExpand(snapshot),
