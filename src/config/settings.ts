@@ -63,7 +63,7 @@ export const COLONY_SETTINGS = {
     heavyBuilderCount: 3,
     upgradersByStage: {
       bootstrap: 1,
-      early: 2,
+      early: 1,
       mid: 3,
       late: 3
     } as Record<ColonyStage, number>,
@@ -282,7 +282,12 @@ export function getWallTargetHits(rcl: number): number {
 }
 
 export function isUpgradingPaused(room: Room): boolean {
-  const fillRatio = Math.max(0, Math.min(1, COLONY_SETTINGS.upgrading.pauseWhenNoStorageFillRatio));
+  const controllerLevel = room.controller?.level ?? 0;
+  const lowRclNoStorageFillCap = controllerLevel <= 3 ? 0.45 : 1;
+  const fillRatio = Math.max(
+    0,
+    Math.min(1, Math.min(COLONY_SETTINGS.upgrading.pauseWhenNoStorageFillRatio, lowRclNoStorageFillCap))
+  );
   const requiredEnergy = Math.ceil(room.energyCapacityAvailable * fillRatio);
 
   const storageThreshold = Math.max(0, COLONY_SETTINGS.upgrading.pauseWhenStorageEnergyBelow);

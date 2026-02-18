@@ -177,7 +177,7 @@ var COLONY_SETTINGS = {
     heavyBuilderCount: 3,
     upgradersByStage: {
       bootstrap: 1,
-      early: 2,
+      early: 1,
       mid: 3,
       late: 3
     },
@@ -369,7 +369,13 @@ function getWallTargetHits(rcl) {
   return rcl >= 8 ? COLONY_SETTINGS.walls.targetHitsByRcl[8] : COLONY_SETTINGS.walls.targetHitsByRcl[1];
 }
 function isUpgradingPaused(room) {
-  const fillRatio = Math.max(0, Math.min(1, COLONY_SETTINGS.upgrading.pauseWhenNoStorageFillRatio));
+  var _a, _b;
+  const controllerLevel = (_b = (_a = room.controller) == null ? void 0 : _a.level) != null ? _b : 0;
+  const lowRclNoStorageFillCap = controllerLevel <= 3 ? 0.45 : 1;
+  const fillRatio = Math.max(
+    0,
+    Math.min(1, Math.min(COLONY_SETTINGS.upgrading.pauseWhenNoStorageFillRatio, lowRclNoStorageFillCap))
+  );
   const requiredEnergy = Math.ceil(room.energyCapacityAvailable * fillRatio);
   const storageThreshold = Math.max(0, COLONY_SETTINGS.upgrading.pauseWhenStorageEnergyBelow);
   if (room.storage && storageThreshold > 0) {
@@ -1689,6 +1695,13 @@ function minimumEnergyForRole(spawn, role) {
   if (role !== "miner") return 0;
   return Math.min(spawn.room.energyCapacityAvailable, 400);
 }
+function bodyEnergyBudget(spawn, bypassEnergyGate) {
+  const available = spawn.room.energyAvailable;
+  if (bypassEnergyGate) return available;
+  const reserveRatio = Math.max(0, Math.min(0.95, COLONY_SETTINGS.spawn.reserveEnergyRatio));
+  const reserveEnergy = Math.floor(spawn.room.energyCapacityAvailable * reserveRatio);
+  return Math.max(0, available - reserveEnergy);
+}
 function pickBootstrapTargetRoom(targets, roomCreeps, plannedByTarget) {
   var _a;
   if (targets.length === 0) return void 0;
@@ -1822,7 +1835,7 @@ function runSpawnManager() {
       plannedRoleCountsByRoom[roomName]
     );
     if (!bypassEnergyGate && spawn.room.energyAvailable < Math.max(requiredEnergy, roleMinEnergy)) continue;
-    const body = buildBody(role, spawn.room.energyAvailable);
+    const body = buildBody(role, bodyEnergyBudget(spawn, bypassEnergyGate));
     if (!body) continue;
     const sourceId = role === "miner" ? pickDedicatedSource(
       roomName,
@@ -2052,12 +2065,14 @@ function fillPriorityEnergyTargets(creep) {
 }
 
 // src/roles/common.ts
-function updateWorkingState(creep, mode = RESOURCE_ENERGY) {
+function updateWorkingState(creep, mode = RESOURCE_ENERGY, startWorkingAtUsedCapacity) {
   const usedCapacity = mode === "any" ? creep.store.getUsedCapacity() : creep.store.getUsedCapacity(mode);
   if (creep.memory.working && usedCapacity === 0) {
     creep.memory.working = false;
   }
-  if (!creep.memory.working && creep.store.getFreeCapacity() === 0) {
+  const isFullForMode = mode === "any" ? creep.store.getFreeCapacity() === 0 : creep.store.getFreeCapacity(mode) === 0;
+  const shouldStartWithPartialLoad = startWorkingAtUsedCapacity !== void 0 && usedCapacity >= Math.max(1, startWorkingAtUsedCapacity);
+  if (!creep.memory.working && (isFullForMode || shouldStartWithPartialLoad)) {
     creep.memory.working = true;
   }
 }
@@ -2265,7 +2280,7 @@ function fillCoreEnergyTargets(creep) {
   return result === OK;
 }
 function runHauler(creep) {
-  updateWorkingState(creep);
+  updateWorkingState(creep, RESOURCE_ENERGY, 1);
   const assignedSource = creep.memory.lockSource && creep.memory.sourceId ? Game.getObjectById(creep.memory.sourceId) : null;
   const isDedicated = Boolean(assignedSource);
   if (!creep.memory.working) {
@@ -2460,7 +2475,7 @@ function runSoldier(creep) {
 
 // src/roles/upgrader.ts
 function runUpgrader(creep) {
-  updateWorkingState(creep);
+  updateWorkingState(creep, RESOURCE_ENERGY, 1);
   if (!creep.memory.working) {
     acquireEnergy(creep);
     return;

@@ -124,6 +124,15 @@ function minimumEnergyForRole(spawn: StructureSpawn, role: RoleName): number {
   return Math.min(spawn.room.energyCapacityAvailable, 400);
 }
 
+function bodyEnergyBudget(spawn: StructureSpawn, bypassEnergyGate: boolean): number {
+  const available = spawn.room.energyAvailable;
+  if (bypassEnergyGate) return available;
+
+  const reserveRatio = Math.max(0, Math.min(0.95, COLONY_SETTINGS.spawn.reserveEnergyRatio));
+  const reserveEnergy = Math.floor(spawn.room.energyCapacityAvailable * reserveRatio);
+  return Math.max(0, available - reserveEnergy);
+}
+
 function pickBootstrapTargetRoom(
   targets: string[],
   roomCreeps: Creep[],
@@ -311,7 +320,7 @@ export function runSpawnManager(): void {
     );
     if (!bypassEnergyGate && spawn.room.energyAvailable < Math.max(requiredEnergy, roleMinEnergy)) continue;
 
-    const body = buildBody(role, spawn.room.energyAvailable);
+    const body = buildBody(role, bodyEnergyBudget(spawn, bypassEnergyGate));
     if (!body) continue;
 
     const sourceId =

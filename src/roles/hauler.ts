@@ -89,7 +89,8 @@ function fillCoreEnergyTargets(creep: Creep): boolean {
 }
 
 export function runHauler(creep: Creep): void {
-  updateWorkingState(creep);
+  // Haulers should deliver as soon as they carry any energy, not only when full.
+  updateWorkingState(creep, RESOURCE_ENERGY, 1);
   const assignedSource =
     creep.memory.lockSource && creep.memory.sourceId
       ? Game.getObjectById(creep.memory.sourceId as Id<Source>)
